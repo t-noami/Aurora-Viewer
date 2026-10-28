@@ -42,6 +42,9 @@ Sources: [wgpu 30.0.1 Metal adapter](https://raw.githubusercontent.com/gfx-rs/wg
 
 ## Bring-up results and repair plan (28 October 2026)
 
+For the separate macOS Rust checks and the Windows-only PowerShell 5.1 gate,
+see [Quality checks on macOS](TESTING.md#quality-checks-on-macos).
+
 The task worktree selects Metal on macOS, compiles out Vulkan-only memory queries and dedicated allocations there, and prevents the viewer from fetching the Windows media pack. The macOS Vulkan-style memory-budget probe still returns no hard budget, and wgpu handles texture allocations. The texture-pressure target now also uses Metal’s recommended working set and current device resource allocations as advisory values, bounded by the texture setting. The recommendation is neither a hard allocation limit nor a measure of free memory. Windows and Linux still select Vulkan, but their builds and rendering have not been revalidated for this change.
 
 On macOS 15.7.7 and Apple M2 Pro, `cargo check --workspace --locked` and the default dev viewer build succeeded. A separate offline demo launch logged `Apple M2 Pro (Metal)`, a ready renderer and CPU-built draw lists. A filtered workspace test of the unavailable media pack passed, and formatting and `git diff --check` passed. These results establish device initialization, not correct pixels, interaction, performance or grid support. The build reported linker warnings from bundled Intel texture-compression objects; their impact remains unverified.

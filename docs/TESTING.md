@@ -28,6 +28,36 @@ single crate resolves the features of its dependencies on its own, so Cargo
 builds a second copy of them (`cargo test -p aurora-render` alone: 67 s of
 dependencies, then again for the next `--workspace` build).
 
+### Quality checks on macOS
+
+Run the Rust checks from the task worktree, using its default `target/`:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+Run each command and record its result separately. Clippy treats warnings as
+errors. The unfiltered workspace test is required; a filtered test is useful
+for diagnosis but does not replace it. If the test command stops on a failure,
+later test binaries may not have run. GPU and shared-memory tests need the
+corresponding macOS resources and may fail under a restrictive sandbox; report
+the environment and any retry rather than treating a skipped or filtered test
+as a pass. Use the default development profile and do not set a separate
+`CARGO_TARGET_DIR`.
+
+`scripts/check.ps1` runs these Rust checks as well as the PowerShell script
+syntax check and coordinates its heavy steps through build slots. PowerShell 7
+can run on macOS, but the script's first step, `check-scripts.ps1`, explicitly
+launches `powershell.exe` for the Windows PowerShell 5.1 parser. Installing
+PowerShell 7 alone therefore does not make the full check runnable on macOS.
+Run `./scripts/check.ps1` on Windows with Windows PowerShell 5.1 to complete
+that gate. The separate macOS commands do not check Windows PowerShell syntax,
+use the script's build-slot coordination, or establish Windows compatibility.
+Run the relevant offline demo and request human validation separately, as
+required for the change.
+
 **To add a variable**: one short line in the table of its topic (the name
 alone in the first column, one sentence in the second); if it takes more
 than one sentence, or if there are several modes, a "Details" paragraph
