@@ -1344,10 +1344,7 @@ fn open_device(adapter: &wgpu::Adapter) -> Result<OpenedDevice, RenderError> {
     if afeat.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) {
         features |= wgpu::Features::MULTI_DRAW_INDIRECT_COUNT;
     }
-    let max_textures = alim
-        .max_binding_array_elements_per_shader_stage
-        .min(alim.max_sampled_textures_per_shader_stage.saturating_sub(17))
-        .clamp(64, 16384);
+    let max_textures = texture_page_limit(adapter.get_info().backend, &alim);
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("aurora"),
         required_features: features,
@@ -1366,6 +1363,20 @@ fn open_device(adapter: &wgpu::Adapter) -> Result<OpenedDevice, RenderError> {
         adapter_specific,
         max_textures,
     })
+}
+
+/// Binding arrays have their own element limit in wgpu. On Metal, do not
+/// reduce their page count by the separate limit for individual textures.
+/// Keep a conservative ceiling while the larger table is validated.
+fn texture_page_limit(backend: wgpu::Backend, limits: &wgpu::Limits) -> u32 {
+    let arrays = limits.max_binding_array_elements_per_shader_stage;
+    if backend == wgpu::Backend::Metal {
+        arrays.clamp(64, 2048)
+    } else {
+        arrays
+            .min(limits.max_sampled_textures_per_shader_stage.saturating_sub(17))
+            .clamp(64, 16384)
+    }
 }
 
 /// Size of the largest device-local memory heap (the GPU's own VRAM on a
@@ -1394,6 +1405,22 @@ fn detect_vram_mb(_: &wgpu::Adapter) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metal_texture_pages_use_the_binding_array_limit() {
+        let limits = wgpu::Limits {
+            max_binding_array_elements_per_shader_stage: 1_000_000,
+            max_sampled_textures_per_shader_stage: 96,
+            ..Default::default()
+        };
+        assert_eq!(texture_page_limit(wgpu::Backend::Metal, &limits), 2048);
+        assert_eq!(texture_page_limit(wgpu::Backend::Vulkan, &limits), 79);
+        let small = wgpu::Limits {
+            max_binding_array_elements_per_shader_stage: 128,
+            ..limits
+        };
+        assert_eq!(texture_page_limit(wgpu::Backend::Metal, &small), 128);
+    }
 
     #[test]
     fn skin_binds_send_only_the_range_asked_for() {
