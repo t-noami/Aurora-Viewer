@@ -1,12 +1,11 @@
 name: CI
 
-# Two stages. A pull request gets the quick checks (formatting, clippy,
-# secrets) while its author reviews it. The full run (tests too) happens in
-# the merge queue, on the PR combined with the latest main: what lands on
-# main is exactly what was tested, and nobody has to update a branch.
+# A pull request runs formatting, clippy, secrets and the workspace tests.
+# A merge queue, when available, repeats the checks on the PR combined with
+# the latest main.
 #
-# A push to main is the commit the queue has just tested: its jobs neither
-# lint nor test it again. They only rebuild the Rust cache when its key
+# A push to main runs cache maintenance only; checks belong to the PR and,
+# when available, the merge queue. It rebuilds the Rust cache when its key
 # changed (Cargo.lock, toolchain), because the caches are written from main
 # alone (see rust-cache below) and a queue run cannot share its own.
 on:
@@ -112,9 +111,6 @@ jobs:
         run: cargo test --profile ci --locked -p aurora-media -p aurora-updater
 
   tests:
-    # Not on pull requests: the agent ran them locally (check.ps1) and the
-    # merge queue runs them on the combined code before anything lands.
-    #
     # The run is split in two halves on two runners, each building the
     # tests itself (the build is the same, the cache too): the interface
     # tests of the viewer (`ui::`, about half of the time) and everything
@@ -122,7 +118,6 @@ jobs:
     # every test of every binary runs in one half and only one, whatever
     # modules are added later; a new module only moves the balance.
     name: tests (Windows, ${{ matrix.half }})
-    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -162,7 +157,7 @@ jobs:
 
   tests-result:
     # The check that main requires: green when both halves passed (or were
-    # skipped, on a pull request), red otherwise.
+    # skipped), red otherwise.
     name: tests (Windows)
     if: always()
     needs: tests
