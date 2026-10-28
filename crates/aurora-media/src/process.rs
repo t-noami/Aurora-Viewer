@@ -413,11 +413,12 @@ pub struct PluginPaths {
 
 impl PluginPaths {
     /// Path of a plugin library (`media_plugin_cef`, `media_plugin_libvlc`,
-    /// `media_plugin_gstreamer`): `<name>.dll` on Windows, `lib<name>.so`
-    /// elsewhere.
+    /// `media_plugin_gstreamer`): the platform's native library name.
     pub fn plugin_file(&self, basename: &str) -> PathBuf {
         let file = if cfg!(windows) {
             format!("{basename}.dll")
+        } else if cfg!(target_os = "macos") {
+            format!("{basename}.dylib")
         } else {
             format!("lib{basename}.so")
         };
@@ -431,6 +432,15 @@ impl PluginPaths {
     /// A folder holding `llplugin\` and SLPlugin (either inside `llplugin\`,
     /// as in Aurora's pack, or next to it, as in a Firestorm / SL install).
     pub fn in_dir(dir: &Path) -> Option<PluginPaths> {
+        #[cfg(target_os = "macos")]
+        {
+            let bundle = dir.join("SLPlugin.app/Contents");
+            let launcher = bundle.join("MacOS/SLPlugin");
+            let plugin_dir = bundle.join("Frameworks");
+            if launcher.is_file() && plugin_dir.is_dir() {
+                return Some(PluginPaths { launcher, plugin_dir });
+            }
+        }
         let plugin_dir = dir.join("llplugin");
         if !plugin_dir.is_dir() {
             return None;
@@ -491,6 +501,8 @@ mod tests {
             found.plugin_file("media_plugin_cef"),
             pack.join("llplugin").join(if cfg!(windows) {
                 "media_plugin_cef.dll"
+            } else if cfg!(target_os = "macos") {
+                "media_plugin_cef.dylib"
             } else {
                 "libmedia_plugin_cef.so"
             })
@@ -498,6 +510,22 @@ mod tests {
         // no pack: nothing, even on a PC where another viewer is installed
         assert!(PluginPaths::discover(Some(&empty), None).is_none());
         assert!(PluginPaths::discover(None, None).is_none());
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finds_an_explicit_macos_plugin_bundle() {
+        let root = std::env::temp_dir().join(format!("aurora-media-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let contents = root.join("SLPlugin.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).expect("fixture");
+        std::fs::create_dir_all(contents.join("Frameworks")).expect("fixture");
+        std::fs::write(contents.join("MacOS/SLPlugin"), b"").expect("fixture");
+        std::fs::write(contents.join("Frameworks/media_plugin_cef.dylib"), b"").expect("fixture");
+        let found = PluginPaths::in_dir(&root).expect("bundle");
+        assert_eq!(found.launcher, contents.join("MacOS/SLPlugin"));
+        assert!(found.has_plugin("media_plugin_cef"));
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
 }
