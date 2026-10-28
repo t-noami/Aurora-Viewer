@@ -390,8 +390,10 @@ impl Renderer {
         let gpu_cull = GpuCull::supported(&device);
         log::info!(
             "draw lists: {}",
-            if gpu_cull {
+            if gpu_cull && device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) {
                 "culled on the GPU (multi_draw_indexed_indirect_count)"
+            } else if gpu_cull {
+                "culled on the GPU (experimental Metal fixed-count draws)"
             } else {
                 "built on the CPU (no MULTI_DRAW_INDIRECT_COUNT, or AURORA_CPU_CULL)"
             }

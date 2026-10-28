@@ -7579,6 +7579,7 @@ What the inventory must show with these scenarios:
 | `AURORA_PRESENT_MODE=<mode>` | Forces the present mode of the swapchain |
 | `AURORA_WINDOW_HOLD=0` | No frames while a mouse button is held on the window frame or the system menu is open, as before (Windows) |
 | `AURORA_CPU_CULL=1` | Draw lists built on the CPU |
+| `AURORA_METAL_GPU_CULL=1` | Experimental fixed-count GPU culling on Metal |
 | `AURORA_LIST_INDEX=0` or `check` | Draw lists that walk all the objects as before, or check of their index |
 | `AURORA_TEXTURE_TODO=0` or `check` | Texture streaming that walks every texture as before, or check of its to-do list |
 | `AURORA_CPU_ATTACH=1` | Worn objects and rigged meshes placed by the sync, without the GPU anchors |
@@ -8170,6 +8171,7 @@ What the inventory must show with these scenarios:
   compression, each decoding task encodes the texture to BC7 and checks the
   result; those it would damage stay in RGBA8. The log announces it at
   startup (`textures: BC7 compression on|off (GPU support: …)`).
+- **`AURORA_METAL_GPU_CULL=1`**: on macOS, try GPU culling with fixed-count indirect draws when indirect-count draws are unavailable. All unused argument slots are cleared each frame. This experimental path may be slower than the default CPU lists; compare the same offline scene, captures and frame profiles before enabling it in normal use. `AURORA_CPU_CULL=1` takes precedence.
 - **`AURORA_CPU_CULL=1`**: builds all the draw lists on the CPU (the
   fallback when the GPU does not have `MULTI_DRAW_INDIRECT_COUNT`) instead
   of sorting them on the GPU, to compare; `cull=cpu|gpu` in the

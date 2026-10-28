@@ -13,6 +13,8 @@
 //!
 //! The CPU path (all lists built by `Scene::build_lists`) remains when the
 //! device lacks `MULTI_DRAW_INDIRECT_COUNT`, and with AURORA_CPU_CULL=1.
+//! On macOS, AURORA_METAL_GPU_CULL=1 experiments with fixed-count draws and
+//! clears unused slots; it is not the default until comparison is complete.
 //!
 //! Two owners: the tables are the scene's, kept by the main thread
 //! ([`GpuTable`], [`CullTables`]) and written through the frame's journal;
@@ -908,13 +910,14 @@ pub struct GpuCull {
 }
 
 impl GpuCull {
-    /// The GPU lists need indirect draw counts and enough storage buffers;
-    /// AURORA_CPU_CULL=1 keeps the CPU lists (comparison).
+    /// GPU lists need enough storage buffers and indirect draw counts, or the
+    /// opt-in Metal fixed-count experiment. AURORA_CPU_CULL takes precedence.
     pub fn supported(device: &wgpu::Device) -> bool {
         static FORCE_CPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let force_cpu = *FORCE_CPU.get_or_init(|| std::env::var_os("AURORA_CPU_CULL").is_some_and(|v| v != "0"));
+        let metal_experiment = cfg!(target_os = "macos") && std::env::var_os("AURORA_METAL_GPU_CULL").is_some_and(|v| v != "0");
         !force_cpu
-            && device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
+            && (device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) || metal_experiment)
             && device.limits().max_storage_buffers_per_shader_stage >= 8
     }
 
@@ -1059,7 +1062,7 @@ impl GpuCull {
             label: Some("cull args"),
             size: REGIONS as u64 * cap as u64 * std::mem::size_of::<DrawIndexedIndirect>() as u64,
             // copy source: GPU test read-back
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
     }
@@ -1129,6 +1132,11 @@ impl GpuCull {
             ],
         });
         encoder.clear_buffer(&self.counts, 0, None);
+        // Metal has no indirect-count draw. Clear all argument slots so the
+        // unused slots are zero-instance draws when submitted at a fixed count.
+        if !device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) {
+            encoder.clear_buffer(&self.args, 0, None);
+        }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("gpu culling"),
             timestamp_writes: timestamps,
@@ -1241,6 +1249,11 @@ impl GpuCull {
     /// Slots per bin: the `max_count` of the indirect count draws.
     pub fn cap(&self) -> u32 {
         self.cap
+    }
+
+    /// Maximum populated arguments per bin in the current frame.
+    pub fn faces(&self) -> u32 {
+        self.faces
     }
 
     /// Byte offset of argument region `r` (a bin or a prepass copy).
@@ -2030,6 +2043,12 @@ mod tests {
         )
         .map(|p| p.to_array());
         cull.prepare(&device, &queue, n_faces, tables.objects.len(), frame);
+        // The fixed-count path must not replay arguments left by an earlier
+        // frame when the current frame has fewer visible faces.
+        if !device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) {
+            let bytes = REGIONS * cull.cap() as usize * std::mem::size_of::<DrawIndexedIndirect>();
+            queue.write_buffer(cull.args(), 0, &vec![0xff; bytes]);
+        }
         let mut f = frame;
         f.sizes[0] = n_faces as u32;
         f.sizes[1] = n_obj;
@@ -2123,6 +2142,11 @@ mod tests {
                     "bin {b} slot {j}"
                 );
             }
+            if !device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) {
+                for j in e.len()..n_faces {
+                    assert_eq!(&args[(b * cap + j) * 5..(b * cap + j) * 5 + 5], &[0; 5], "unused bin {b} slot {j}");
+                }
+            }
             if b < MAIN_BINS {
                 // phase 1 prepass list: the bin's draws visible last frame, any order
                 let mut want: Vec<u32> = e.iter().copied().filter(|&r| was[r as usize] != 0).collect();
@@ -2131,6 +2155,12 @@ mod tests {
                 want.sort_unstable();
                 got.sort_unstable();
                 assert_eq!(got, want, "phase 1 list of bin {b}");
+                if !device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) {
+                    for j in n..n_faces {
+                        let at = ((REGION_PRE1 + b) * cap + j) * 5;
+                        assert_eq!(&args[at..at + 5], &[0; 5], "unused phase 1 bin {b} slot {j}");
+                    }
+                }
             }
         }
     }
