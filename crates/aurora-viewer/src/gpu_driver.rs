@@ -170,6 +170,7 @@ fn kepler(gpu: &str) -> bool {
 }
 
 /// The registry's `DriverDate`: month-day-year (`7-22-2026`).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn parse_driver_date(text: &str) -> Option<(i32, u32, u32)> {
     let mut parts = text.trim().split('-');
     let month: u32 = parts.next()?.parse().ok()?;

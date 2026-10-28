@@ -50,6 +50,7 @@ impl Notifier {
 
 /// The `<toast>` of a notification (ToastGeneric: the title in bold, the
 /// body below), silent: Aurora plays its own sounds.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn toast_xml(title: &str, body: &str) -> String {
     let mut texts = format!("<text>{}</text>", escape(title));
     if !body.is_empty() {
@@ -60,6 +61,7 @@ pub fn toast_xml(title: &str, body: &str) -> String {
     )
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {

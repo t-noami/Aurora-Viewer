@@ -356,6 +356,7 @@ fn should_report(dir: &Path, exit_code: u32) -> bool {
     !dir.join("system-ending").exists() && (exit_code != 0 || dir.join("failed").exists() || !dir.join("normal").exists())
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn preserve(dir: &Path, exit_code: u32) -> anyhow::Result<()> {
     std::fs::write(dir.join("exit-code.txt"), format!("0x{exit_code:08X}"))?;
     std::fs::write(dir.join("failed"), [])?;
