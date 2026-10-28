@@ -222,7 +222,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Create the renderer on the Vulkan backend for the given window, on
+    /// Create the renderer on the platform backend for the given window, on
     /// the GPU `gpu` asks for (`adapter_choice::Wanted`: empty for the
     /// automatic choice).
     pub fn new(
@@ -232,9 +232,14 @@ impl Renderer {
         vsync: bool,
         gpu: &str,
     ) -> Result<Renderer, RenderError> {
+        let backend = if cfg!(target_os = "macos") {
+            wgpu::Backends::METAL
+        } else {
+            wgpu::Backends::VULKAN
+        };
         let desc = || {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-            desc.backends = wgpu::Backends::VULKAN;
+            desc.backends = backend;
             desc.flags = if std::env::var_os("AURORA_GPU_VALIDATION").is_some() {
                 wgpu::InstanceFlags::debugging()
             } else {
@@ -245,13 +250,13 @@ impl Renderer {
         let mut instance = wgpu::Instance::new(desc());
         // ---- the GPU: every adapter listed, then tried in our order
         // (adapter_choice.rs), the next one if one fails to open
-        let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
+        let mut adapters = pollster::block_on(instance.enumerate_adapters(backend));
         // Dozen, kept out at start (vulkan_drivers.rs), may be the only
         // Vulkan driver of this PC: let it back in rather than draw nothing
-        if adapters.is_empty() && crate::vulkan_drivers::allow_again() {
+        if backend == wgpu::Backends::VULKAN && adapters.is_empty() && crate::vulkan_drivers::allow_again() {
             log::warn!("GPU: no Vulkan adapter without Dozen (Vulkan on Direct3D 12): trying again with it");
             instance = wgpu::Instance::new(desc());
-            adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
+            adapters = pollster::block_on(instance.enumerate_adapters(backend));
         }
         let surface = instance.create_surface(target).map_err(|e| RenderError::Surface(e.to_string()))?;
         let candidates: Vec<crate::adapter_choice::Candidate> = adapters
@@ -276,7 +281,9 @@ impl Renderer {
             );
         }
         let notice = crate::adapter_choice::hint(&candidates);
-        if let Some(n) = notice {
+        if backend == wgpu::Backends::VULKAN
+            && let Some(n) = notice
+        {
             log::warn!("GPU: {}", n.log_line());
         }
         let wanted = crate::adapter_choice::Wanted::parse(gpu);
@@ -288,7 +295,7 @@ impl Renderer {
             );
         }
         let mut opened = None;
-        let mut failure = RenderError::NoAdapter("no Vulkan adapter can present to the window".into());
+        let mut failure = RenderError::NoAdapter(format!("no {backend:?} adapter can present to the window"));
         for (n, &i) in plan.order.iter().enumerate() {
             match open_device(&adapters[i]) {
                 Ok(o) => {
@@ -1361,6 +1368,7 @@ fn open_device(adapter: &wgpu::Adapter) -> Result<OpenedDevice, RenderError> {
 
 /// Size of the largest device-local memory heap (the GPU's own VRAM on a
 /// discrete card), read from Vulkan. None on other backends.
+#[cfg(not(target_os = "macos"))]
 fn detect_vram_mb(adapter: &wgpu::Adapter) -> Option<u64> {
     use ash::vk;
     // SAFETY: the hal adapter is only borrowed for this call; the physical
@@ -1374,6 +1382,11 @@ fn detect_vram_mb(adapter: &wgpu::Adapter) -> Option<u64> {
         .filter(|h| h.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
         .map(|h| h.size / (1024 * 1024))
         .max()
+}
+
+#[cfg(target_os = "macos")]
+fn detect_vram_mb(_: &wgpu::Adapter) -> Option<u64> {
+    None
 }
 
 #[cfg(test)]

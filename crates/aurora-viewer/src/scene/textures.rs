@@ -2736,7 +2736,13 @@ impl TextureStreamer {
         self.last_budget = now;
         let (used, live) = (renderer.textures.page_bytes(), renderer.textures.bytes());
         let video = renderer.video_memory.read(&renderer.device);
-        let target = texture_budget::forced_target().unwrap_or_else(|| texture_budget::texture_target(setting, used, video));
+        let target = texture_budget::forced_target().unwrap_or_else(|| {
+            #[cfg(target_os = "macos")]
+            if let Some(advisory) = renderer.video_memory.metal_advisory() {
+                return texture_budget::metal_texture_target(setting, used, advisory);
+            }
+            texture_budget::texture_target(setting, used, video)
+        });
         let before = self.pressure.step();
         // one step below, the pages would hold the textures' bytes with
         // the free room they have now (none taken back from step 1: only
