@@ -15064,6 +15064,11 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        // Metal cannot acquire a drawable while the window is hidden. Show
+        // it after GPU initialization, otherwise waiting for the first
+        // presented frame before showing it can never complete on macOS.
+        #[cfg(target_os = "macos")]
+        window.set_visible(true);
         log::info!(
             "renderer ready: {} via {} ({} texture slots in {} pages at most, GPU timers: {})",
             renderer.info.name,
