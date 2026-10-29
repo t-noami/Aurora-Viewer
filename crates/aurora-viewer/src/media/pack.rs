@@ -57,9 +57,20 @@ fn retry_delay(failure: Failure, failures: u32) -> Option<Duration> {
 impl PluginPack {
     pub fn new(root: PathBuf) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let dir = media_pack::installed(&root, &PACK);
+        // There is no macOS media pack: never download or load the Windows one.
+        let dir = if cfg!(target_os = "macos") {
+            None
+        } else {
+            media_pack::installed(&root, &PACK)
+        };
         let mut this = Self {
-            state: if dir.is_some() { PackState::Ready } else { PackState::Idle },
+            state: if cfg!(target_os = "macos") {
+                PackState::Failed(Failure::Unsupported)
+            } else if dir.is_some() {
+                PackState::Ready
+            } else {
+                PackState::Idle
+            },
             root,
             dir,
             source: Source::default(),
@@ -70,7 +81,7 @@ impl PluginPack {
             retry_at: None,
             // the isolated update tests have their own local feed, and unit
             // tests no network at all
-            automatic: !cfg!(test) && aurora_updater::test_environment().is_none(),
+            automatic: !cfg!(target_os = "macos") && !cfg!(test) && aurora_updater::test_environment().is_none(),
         };
         // AURORA_MEDIA_PACK_FEED: a pack served by a test server of this PC
         // (loopback only), to try it before it is published. Its size and
@@ -210,9 +221,13 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
         let root = std::env::temp_dir().join(format!("aurora-media-pack-{}", uuid::Uuid::new_v4()));
         let mut pack = PluginPack::new(root);
-        assert!(pack.dir().is_none() && matches!(pack.state(), PackState::Idle));
+        assert!(pack.dir().is_none());
         assert!(!pack.poll(true, runtime.handle()));
-        assert!(matches!(pack.state(), PackState::Idle), "no download in a unit test");
+        if cfg!(target_os = "macos") {
+            assert!(matches!(pack.state(), PackState::Failed(Failure::Unsupported)));
+        } else {
+            assert!(matches!(pack.state(), PackState::Idle), "no download in a unit test");
+        }
         // what the worker reports ends up in the state, and in `dir`
         pack.state = PackState::Downloading(Progress::default());
         pack.tx.send(Event::Done(Err(Failure::Network))).expect("fixture");

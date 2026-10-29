@@ -509,10 +509,16 @@ fn plan(ops: &[LookOp]) -> Plan {
                     ..Default::default()
                 }
             }
-            LookOp::Screen { mode, wavelength, angle } => GpuOp {
-                a: [4.0, if mode == ScreenMode::Sine2d { 0.0 } else { 1.0 }, wavelength, angle],
-                ..Default::default()
-            },
+            LookOp::Screen { mode, wavelength, angle } => {
+                // LLImageFilter::filterScreen computes these once on the CPU;
+                // doing so also avoids backend-dependent angle reduction.
+                let (sin, cos) = angle.to_radians().sin_cos();
+                GpuOp {
+                    a: [4.0, if mode == ScreenMode::Sine2d { 0.0 } else { 1.0 }, wavelength, angle],
+                    b: [sin, cos, 0.0, 0.0],
+                    ..Default::default()
+                }
+            }
             LookOp::Convolve { kernel, normalize, abs } => {
                 let (mut lo, mut hi) = (0.0f32, 0.0f32);
                 for &v in kernel.iter().flatten() {

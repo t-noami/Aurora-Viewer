@@ -1482,13 +1482,13 @@ mod tests {
                 &mut st,
                 vec![
                     egui::Event::Key {
-                        key: egui::Key::Home,
+                        key: egui::Key::ArrowUp,
                         physical_key: None,
                         pressed: true,
                         repeat: false,
                         modifiers: egui::Modifiers {
-                            ctrl: true,
                             command: true,
+                            mac_cmd: cfg!(target_os = "macos"),
                             ..Default::default()
                         },
                     },

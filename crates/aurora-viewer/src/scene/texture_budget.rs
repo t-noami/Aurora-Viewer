@@ -107,6 +107,22 @@ pub fn texture_target(setting: u64, pages: u64, video: Option<VideoMemory>) -> u
     setting.min(process.saturating_sub(others)).max(MIN_TEXTURE_BYTES)
 }
 
+/// Use Metal's recommended working set as a conservative texture-pressure
+/// threshold, not as a hard budget or reported free memory. The user setting
+/// remains an upper bound; missing advice keeps the existing setting.
+#[cfg(target_os = "macos")]
+pub fn metal_texture_target(setting: u64, pages: u64, advisory: aurora_render::vram::MetalMemoryAdvisory) -> u64 {
+    texture_target(
+        setting,
+        pages,
+        Some(VideoMemory {
+            budget: advisory.recommended_working_set,
+            usage: advisory.allocated,
+            allocated: advisory.allocated,
+        }),
+    )
+}
+
 /// What the pressure is decided on, a few times a second.
 #[derive(Clone, Copy, Debug)]
 pub struct Reading {
@@ -181,6 +197,20 @@ mod tests {
             usage: allocated,
             allocated,
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_advisory_caps_textures_without_exceeding_the_setting() {
+        use aurora_render::vram::MetalMemoryAdvisory;
+        let mb = 1024 * 1024;
+        let advisory = MetalMemoryAdvisory {
+            recommended_working_set: 4096 * mb,
+            allocated: 3500 * mb,
+        };
+        let reduced = super::metal_texture_target(4096 * mb, 2000 * mb, advisory);
+        assert_eq!(reduced, (4096 * mb / 5 * 4) - 1500 * mb);
+        assert_eq!(super::metal_texture_target(512 * mb, 2000 * mb, advisory), 512 * mb);
     }
 
     #[test]

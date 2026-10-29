@@ -23,7 +23,11 @@
 //! They now give their memory back as they go, and the texture budget
 //! counts `usage` (scene/texture_budget.rs in the viewer).
 
+#[cfg(not(target_os = "macos"))]
 use ash::vk;
+
+#[cfg(target_os = "macos")]
+use objc2_metal::MTLDevice;
 
 /// Bytes of the device-local heap, see the module: `budget` is what the
 /// system lets this process use at the moment, `usage` what the driver
@@ -32,6 +36,15 @@ use ash::vk;
 pub struct VideoMemory {
     pub budget: u64,
     pub usage: u64,
+    pub allocated: u64,
+}
+
+/// Metal's performance recommendation and resource allocations. The
+/// recommendation is not a hard allocation limit or current free memory.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetalMemoryAdvisory {
+    pub recommended_working_set: u64,
     pub allocated: u64,
 }
 
@@ -64,9 +77,39 @@ impl VideoMemoryProbe {
                 budget >> 20,
                 usage >> 20
             ),
-            None => log::info!("GPU memory budget: not reported by the driver (texture memory follows its setting only)"),
+            None => log::info!("GPU memory budget: not reported by the driver"),
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(advisory) = Self::metal_advisory_for(&adapter) {
+            log::info!(
+                "Metal memory: recommended working set {} MB, allocated {} MB (advisory, not a hard budget)",
+                advisory.recommended_working_set >> 20,
+                advisory.allocated >> 20
+            );
         }
         VideoMemoryProbe { adapter, heap }
+    }
+
+    /// Metal memory metrics are a texture-pressure hint, not a Vulkan-style
+    /// budget: keep them out of the hard-budget reporting path.
+    #[cfg(target_os = "macos")]
+    pub fn metal_advisory(&self) -> Option<MetalMemoryAdvisory> {
+        let mut advisory = Self::metal_advisory_for(&self.adapter)?;
+        advisory.recommended_working_set = forced_budget().unwrap_or(advisory.recommended_working_set);
+        Some(advisory)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn metal_advisory_for(adapter: &wgpu::Adapter) -> Option<MetalMemoryAdvisory> {
+        // SAFETY: the borrowed HAL adapter is retained only for this query;
+        // Metal device properties are read without changing device state.
+        let hal = unsafe { adapter.as_hal::<wgpu::hal::api::Metal>() }?;
+        let device = hal.raw_device();
+        let recommended_working_set = device.recommendedMaxWorkingSetSize();
+        (recommended_working_set > 0).then(|| MetalMemoryAdvisory {
+            recommended_working_set,
+            allocated: device.currentAllocatedSize() as u64,
+        })
     }
 
     /// The figures of the moment; None when the driver does not report them.
@@ -84,6 +127,7 @@ impl VideoMemoryProbe {
     /// The largest device-local heap (the card's own memory on a discrete
     /// GPU, the shared memory on an integrated one), when the extension and
     /// the query it extends are there.
+    #[cfg(not(target_os = "macos"))]
     fn budget_heap(adapter: &wgpu::Adapter) -> Option<usize> {
         // SAFETY: the hal adapter is only borrowed for this call; the
         // queries below read properties and change no state.
@@ -111,6 +155,7 @@ impl VideoMemoryProbe {
     }
 
     /// (budget, usage) of a heap.
+    #[cfg(not(target_os = "macos"))]
     fn query(adapter: &wgpu::Adapter, heap: usize) -> Option<(u64, u64)> {
         // SAFETY: the hal adapter is only borrowed for this call; a physical
         // device query, valid from any thread, with the budget structure the
@@ -127,5 +172,14 @@ impl VideoMemoryProbe {
         let (budget, usage) = (*budget.heap_budget.get(heap)?, *budget.heap_usage.get(heap)?);
         // (a driver that fills nothing in reports no budget)
         (budget > 0).then_some((budget, usage))
+    }
+    #[cfg(target_os = "macos")]
+    fn budget_heap(_: &wgpu::Adapter) -> Option<usize> {
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    fn query(_: &wgpu::Adapter, _: usize) -> Option<(u64, u64)> {
+        None
     }
 }

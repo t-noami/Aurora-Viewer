@@ -17,17 +17,20 @@ use std::time::Duration;
 /// How often the process's modules are listed: the hooks arrive late and
 /// at any time. A list of a few hundred modules takes well under a
 /// millisecond on a background thread.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const EVERY: Duration = Duration::from_secs(10);
 
 /// One known hook DLL, what it belongs to and what to do if the image is
 /// lost while it is loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub struct Hook {
     pub file: &'static str,
     pub program: &'static str,
     pub advice: &'static str,
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub const KNOWN: &[Hook] = &[
     Hook {
         file: "DiscordHook64.dll",
@@ -52,12 +55,14 @@ pub const KNOWN: &[Hook] = &[
 ];
 
 /// The known hook of a loaded module's file name (case does not matter).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn known(file: &str) -> Option<&'static Hook> {
     KNOWN.iter().find(|h| h.file.eq_ignore_ascii_case(file))
 }
 
 /// The hooks among `loaded` (module file names) that are not in `seen` yet,
 /// once each; `seen` is updated.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn arrived(seen: &mut Vec<&'static str>, loaded: &[String]) -> Vec<&'static Hook> {
     let mut new = Vec::new();
     for name in loaded {

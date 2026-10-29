@@ -122,6 +122,7 @@ fn mac_hash(unique: Option<[u8; 6]>) -> String {
 /// LLWMIMethods::getGenericSerialNumber's folding: the UTF-16 units of the
 /// serial, up to the first NUL, added in turn to the six bytes, each sum
 /// kept modulo 256 (the store into an unsigned char).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn fold_serial(units: &[u16]) -> [u8; 6] {
     let mut id = [0u8; 6];
     let mut j = 0;
@@ -141,6 +142,7 @@ fn fold_serial(units: &[u16]) -> [u8; 6] {
 /// getGenericSerialNumber for the motherboard UUID: 36 characters (or 35,
 /// the old format without the fourth dash), 32 hex digits at the fixed
 /// positions. The dashes themselves are not checked, as there.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn usable_uuid(s: &str) -> bool {
     let bytes = s.as_bytes();
     let broken = match bytes.len() {
@@ -172,6 +174,7 @@ fn usable_uuid(s: &str) -> bool {
 
 /// LLMachineID::init on Windows, then llHashedUniqueID's fallback: the
 /// motherboard UUID, else the Windows serial, else the adapter address.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn pick_windows(product: Option<[u8; 6]>, legacy: Option<[u8; 6]>, node: Option<[u8; 6]>) -> (Option<[u8; 6]>, &'static str) {
     if let Some(id) = product {
         (Some(id), "the motherboard UUID")

@@ -11,7 +11,17 @@ pub mod bc7;
 mod bloom;
 mod contact_shadows;
 mod cutout;
+#[cfg(not(target_os = "macos"))]
 mod dedicated;
+#[cfg(target_os = "macos")]
+mod dedicated {
+    pub fn bytes() -> u64 {
+        0
+    }
+    pub fn texture(_: &wgpu::Device, _: &wgpu::TextureDescriptor) -> Option<Result<wgpu::Texture, String>> {
+        None
+    }
+}
 mod dof;
 mod drawn_pick;
 mod exposure;

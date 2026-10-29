@@ -28,6 +28,36 @@ single crate resolves the features of its dependencies on its own, so Cargo
 builds a second copy of them (`cargo test -p aurora-render` alone: 67 s of
 dependencies, then again for the next `--workspace` build).
 
+### Quality checks on macOS
+
+Run the Rust checks from the task worktree, using its default `target/`:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+Run each command and record its result separately. Clippy treats warnings as
+errors. The unfiltered workspace test is required; a filtered test is useful
+for diagnosis but does not replace it. If the test command stops on a failure,
+later test binaries may not have run. GPU and shared-memory tests need the
+corresponding macOS resources and may fail under a restrictive sandbox; report
+the environment and any retry rather than treating a skipped or filtered test
+as a pass. Use the default development profile and do not set a separate
+`CARGO_TARGET_DIR`.
+
+`scripts/check.ps1` runs these Rust checks as well as the PowerShell script
+syntax check and coordinates its heavy steps through build slots. PowerShell 7
+can run on macOS, but the script's first step, `check-scripts.ps1`, explicitly
+launches `powershell.exe` for the Windows PowerShell 5.1 parser. Installing
+PowerShell 7 alone therefore does not make the full check runnable on macOS.
+Run `./scripts/check.ps1` on Windows with Windows PowerShell 5.1 to complete
+that gate. The separate macOS commands do not check Windows PowerShell syntax,
+use the script's build-slot coordination, or establish Windows compatibility.
+Run the relevant offline demo and request human validation separately, as
+required for the change.
+
 **To add a variable**: one short line in the table of its topic (the name
 alone in the first column, one sentence in the second); if it takes more
 than one sentence, or if there are several modes, a "Details" paragraph
@@ -7579,6 +7609,7 @@ What the inventory must show with these scenarios:
 | `AURORA_PRESENT_MODE=<mode>` | Forces the present mode of the swapchain |
 | `AURORA_WINDOW_HOLD=0` | No frames while a mouse button is held on the window frame or the system menu is open, as before (Windows) |
 | `AURORA_CPU_CULL=1` | Draw lists built on the CPU |
+| `AURORA_METAL_GPU_CULL=1` | Experimental fixed-count GPU culling on Metal |
 | `AURORA_LIST_INDEX=0` or `check` | Draw lists that walk all the objects as before, or check of their index |
 | `AURORA_TEXTURE_TODO=0` or `check` | Texture streaming that walks every texture as before, or check of its to-do list |
 | `AURORA_CPU_ATTACH=1` | Worn objects and rigged meshes placed by the sync, without the GPU anchors |
@@ -7628,7 +7659,7 @@ What the inventory must show with these scenarios:
 | `AURORA_FONT_FALLBACK=0` | Without the system fallback fonts |
 | `AURORA_UI_FONT=<font>`, `AURORA_UI_SCALE=<scale>` | Interface font and scale for this launch, without changing the Preferences |
 | `AURORA_TEXTURE_BUDGET_MB=<n>` | Forces the texture memory budget |
-| `AURORA_VRAM_BUDGET_MB=<n>` | The driver's video memory budget taken as n MB, a smaller card on a large one |
+| `AURORA_VRAM_BUDGET_MB=<n>` | Override the GPU budget or Metal texture-pressure recommendation |
 | `AURORA_TEXTURE_SIZING=screen` | Textures sized by their object's diameter on screen times the repeats, as before the Legacy Viewer's sizing |
 | `AURORA_TEXTURE_SLOTS=<n>` | Size of the texture table, to test a full one |
 | `AURORA_BANDWIDTH_KBPS=<n>` | Bandwidth setting for this launch, without changing the Preferences |
@@ -7788,10 +7819,12 @@ What the inventory must show with these scenarios:
     run. The textures of this scenario are then reloaded on demand, like
     those of the grid (camera moved closer after a reduction). A huge value
     (1000000) removes all pressure, to compare.
-- **`AURORA_VRAM_BUDGET_MB=<n>`**: the budget the driver grants the viewer
-  is taken as n MB (at least 256), what the texture budget and the
-  Performance window then read (`aurora-render/src/vram.rs`); what the
-  driver counts for the viewer stays the real figure.
+- **`AURORA_VRAM_BUDGET_MB=<n>`**: on Vulkan the driver budget is taken as
+  n MB (at least 256) for the texture target and Performance window; driver
+  usage stays the real figure. On Metal it overrides the recommended working
+  set used only for the texture-pressure target, not a hard budget or free
+  memory; the Performance window does not report it as a driver budget
+  (`aurora-render/src/vram.rs`).
   - In demo, `AURORA_DEMO_STREAM=3000` with `AURORA_VRAM_BUDGET_MB=2048`
     behaves like a small card: the texture target leaves 20 % of the
     budget free with the rest of what the viewer holds (render targets,
@@ -8168,6 +8201,7 @@ What the inventory must show with these scenarios:
   compression, each decoding task encodes the texture to BC7 and checks the
   result; those it would damage stay in RGBA8. The log announces it at
   startup (`textures: BC7 compression on|off (GPU support: …)`).
+- **`AURORA_METAL_GPU_CULL=1`**: on macOS, try GPU culling with fixed-count indirect draws when indirect-count draws are unavailable. All unused argument slots are cleared each frame. This experimental path may be slower than the default CPU lists; compare the same offline scene, captures and frame profiles before enabling it in normal use. `AURORA_CPU_CULL=1` takes precedence.
 - **`AURORA_CPU_CULL=1`**: builds all the draw lists on the CPU (the
   fallback when the GPU does not have `MULTI_DRAW_INDIRECT_COUNT`) instead
   of sorting them on the GPU, to compare; `cull=cpu|gpu` in the

@@ -218,9 +218,8 @@ fn histo_curve(lut: u32, alpha: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
 // filterScreen on the red level of the pixel: a grey.
 fn screen(op: Op, red: f32, i: f32, j: f32, h: f32) -> f32 {
     let wavelength = op.a.z * h / 2.0;
-    let angle = radians(op.a.w);
-    let s = sin(angle);
-    let c = cos(angle);
+    let s = op.b.x;
+    let c = op.b.y;
     var value: f32;
     if (op.a.y == 0.0) {
         let di = c * i + s * j;

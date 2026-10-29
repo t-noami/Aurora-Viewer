@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 /// Time covered by one `cpu summary` line.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const PERIOD: Duration = Duration::from_secs(10);
 
 /// The process's memory as the system counts it (bytes).
@@ -63,6 +64,7 @@ pub fn process_memory() -> Option<ProcessMemory> {
 /// One thread of the process: its name (empty when it has none) and the
 /// processor cycles it has run.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub struct ThreadTime {
     pub id: u32,
     pub name: String,
@@ -143,6 +145,7 @@ fn system_times() -> Option<(u64, u64)> {
 /// The group of a thread: its name without the number of its pool
 /// (`aurora-jobs-3` → `aurora-jobs`), `main` for the main thread, `unnamed`
 /// for threads without a name (the driver's, the system's).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn group_of(name: &str, id: u32, main: u32) -> String {
     if id == main {
         return "main".to_string();
@@ -160,6 +163,7 @@ pub fn group_of(name: &str, id: u32, main: u32) -> String {
 /// One group of threads over a period: its CPU time, its threads, and the
 /// CPU time of its busiest thread (ms).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub struct GroupTime {
     pub group: String,
     pub ms: f64,
@@ -171,6 +175,7 @@ pub struct GroupTime {
 /// busiest group first. A thread that started in between counts all its
 /// cycles; one that ended is missing (its last cycles are in the process
 /// total).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn group_times(before: &HashMap<u32, u64>, now: &[ThreadTime], main: u32, cycles_per_ms: f64) -> Vec<GroupTime> {
     let mut groups: Vec<GroupTime> = Vec::new();
     for t in now {
@@ -199,6 +204,7 @@ pub fn group_times(before: &HashMap<u32, u64>, now: &[ThreadTime], main: u32, cy
 /// and of the machine, the machine's whole load when known, then each
 /// group as a share of one core (`threads`, and the busiest thread's share
 /// for a pool).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn cpu_line(groups: &[GroupTime], process_ms: f64, elapsed_ms: f64, cores: usize, system_busy: Option<f64>) -> String {
     let pct = |ms: f64| ms / elapsed_ms.max(1.0) * 100.0;
     let mut out = format!(
@@ -229,6 +235,7 @@ pub fn cpu_line(groups: &[GroupTime], process_ms: f64, elapsed_ms: f64, cores: u
 }
 
 /// Groups below this share of one core are only counted (`quiet_groups`).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const QUIET_PERCENT: f64 = 0.1;
 
 /// Starts the thread that writes `cpu summary` every 10 s; `main` is the
@@ -387,6 +394,7 @@ fn live_loop() {
 
 /// The readings of the previous sample, to turn counters into loads.
 #[derive(Default)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 struct Sampler {
     at: Option<Instant>,
     threads: HashMap<u32, u64>,
@@ -533,6 +541,7 @@ fn process_trees(roots: &[u32]) -> HashMap<u32, Vec<u32>> {
 /// From (pid, parent pid) pairs: each root that is listed, with its
 /// descendants (a pid reused by an unrelated process after its parent
 /// ended can slip in: the system does not tell them apart).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn descendants(roots: &[u32], parents: &[(u32, u32)]) -> HashMap<u32, Vec<u32>> {
     let mut out = HashMap::new();
     for &root in roots {

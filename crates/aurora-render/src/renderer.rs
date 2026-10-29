@@ -5811,13 +5811,19 @@ impl Backend {
                 if let Some(pipe) = pipe {
                     pass.set_pipeline(pipe);
                 }
-                pass.multi_draw_indexed_indirect_count(
-                    cull.args(),
-                    cull.region_offset(region),
-                    cull.counts(),
-                    GpuCull::count_offset(bin),
-                    cull.cap(),
-                );
+                if self.device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) {
+                    pass.multi_draw_indexed_indirect_count(
+                        cull.args(),
+                        cull.region_offset(region),
+                        cull.counts(),
+                        GpuCull::count_offset(bin),
+                        cull.cap(),
+                    );
+                } else {
+                    // Fixed-size Metal experiment: the unused slots were
+                    // cleared before culling and issue no instances.
+                    pass.multi_draw_indexed_indirect(cull.args(), cull.region_offset(region), cull.faces());
+                }
             }
         };
 

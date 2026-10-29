@@ -13,6 +13,7 @@ pub enum Handler {
     /// This viewer's executable.
     This,
     /// Another program, by its file name.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     Other(String),
     None,
 }

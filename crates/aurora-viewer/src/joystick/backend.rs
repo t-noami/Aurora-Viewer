@@ -370,6 +370,7 @@ fn hid_interface_paths() -> Result<Vec<String>, String> {
 /// Vendor and product of a HID interface path: `vid_256f&pid_c635` over
 /// USB, `vid&0002256f_pid&c63a` over Bluetooth (the vendor id prefixed by
 /// its source).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn path_ids(path: &str) -> Option<(u16, u16)> {
     let path = path.to_ascii_lowercase();
     let digits = |key: &str| {
