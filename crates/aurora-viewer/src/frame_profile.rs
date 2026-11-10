@@ -393,6 +393,8 @@ struct Period {
     parts: Parts,
     parts_max: Parts,
     gpu: [f32; GPU],
+    gpu_total: f32,
+    gpu_total_frames: u32,
     /// Depth prepasses alone: single-sample, multisampled.
     gpu_depth: [f32; 2],
     /// The ambient occlusion alone (inside g_effects).
@@ -458,6 +460,7 @@ pub struct FrameProfile {
     last_cycles: u64,
     started: Option<Instant>,
     period: Period,
+    last_gpu_frame: Option<u64>,
     /// Summaries written so far.
     periods: u64,
     /// Settings line last logged (logged again when they change).
@@ -485,6 +488,7 @@ impl FrameProfile {
             last_cycles: 0,
             started: None,
             period: Period::default(),
+            last_gpu_frame: None,
             periods: 0,
             settings: String::new(),
             mark: "",
@@ -514,6 +518,7 @@ impl FrameProfile {
             self.last = None;
             self.started = None;
             self.period = Period::default();
+            self.last_gpu_frame = None;
             self.frame = [0.0; LAPS];
             self.frame_cycles = [0; LAPS];
         }
@@ -625,16 +630,26 @@ impl FrameProfile {
         keep_max(&mut p.thread_max, &thread);
         p.threaded = render.render_thread;
         p.journal_bytes += render.journal_bytes;
-        if let Some(g) = render.gpu_elements {
-            add(&mut p.gpu, &g);
-            p.gpu_frames += 1;
+        let new_gpu_sample = render
+            .gpu_sample_frame
+            .is_some_and(|frame| self.last_gpu_frame.is_none_or(|last| frame > last));
+        if new_gpu_sample {
+            self.last_gpu_frame = render.gpu_sample_frame;
+            if let Some(ms) = render.gpu_ms {
+                p.gpu_total += ms;
+                p.gpu_total_frames += 1;
+            }
+            if let Some(g) = render.gpu_elements {
+                add(&mut p.gpu, &g);
+                p.gpu_frames += 1;
+                if let Some(d) = render.gpu_depth {
+                    add(&mut p.gpu_depth, &d);
+                }
+                p.gpu_ssao += render.gpu_ssao.unwrap_or(0.0);
+                p.gpu_contact += render.gpu_contact.unwrap_or(0.0);
+                p.gpu_bloom += render.gpu_bloom.unwrap_or(0.0);
+            }
         }
-        if let Some(d) = render.gpu_depth {
-            add(&mut p.gpu_depth, &d);
-        }
-        p.gpu_ssao += render.gpu_ssao.unwrap_or(0.0);
-        p.gpu_contact += render.gpu_contact.unwrap_or(0.0);
-        p.gpu_bloom += render.gpu_bloom.unwrap_or(0.0);
         p.draws += render.draws as u64;
         p.blend_triangles += render.blend_triangles;
         p.blend_early += render.blend_early_discard as u32;
@@ -645,7 +660,7 @@ impl FrameProfile {
         p.triangles += render.triangles;
         p.shadow_draws += render.shadow_draws as u64;
         let sh = &render.shadow;
-        if let Some(g) = sh.gpu_ms {
+        if new_gpu_sample && let Some(g) = sh.gpu_ms {
             add(&mut p.gpu_shadow, &g);
             p.gpu_shadow_frames += 1;
         }
@@ -718,6 +733,8 @@ pub struct Averages {
     phases: [f32; PHASES],
     /// GPU elements, when the GPU timed them.
     pub gpu: Option<[f32; GPU]>,
+    /// Elapsed GPU time between the first and last timed passes.
+    pub gpu_total_ms: Option<f32>,
     /// The main thread handing the frame's packet over (inside the
     /// `render` lap, whose rest waits for the render thread).
     pub packet_ms: f32,
@@ -733,6 +750,7 @@ impl Averages {
             parts: p.parts.0.map(|v| v / n),
             phases: p.phases.map(|v| v / n),
             gpu: (p.gpu_frames > 0).then(|| p.gpu.map(|v| v / p.gpu_frames as f32)),
+            gpu_total_ms: (p.gpu_total_frames > 0).then(|| p.gpu_total / p.gpu_total_frames as f32),
             packet_ms: p.thread[0] / n,
         }
     }
@@ -755,6 +773,7 @@ impl Averages {
             parts: [0.0; PARTS],
             phases: [0.0; PHASES],
             gpu,
+            gpu_total_ms: gpu.map(|g| g.iter().sum()),
             packet_ms: 0.0,
         };
         for &(lap, ms) in laps {
@@ -932,25 +951,34 @@ fn summary(p: &Period, elapsed: Duration) -> String {
         count(p.ui[2]),
         p.ui_vertices_max
     );
-    let gpu_n = p.gpu_frames.max(1) as f32;
-    let _ = write!(out, " | gpu={:.2}", p.gpu.iter().sum::<f32>() / gpu_n);
-    for (el, ms) in GpuElement::ALL.iter().zip(p.gpu) {
-        let _ = write!(out, " g_{}={:.3}", el.key(), ms / gpu_n);
+    if p.gpu_total_frames > 0 {
+        let _ = write!(
+            out,
+            " | gpu={:.2} gpu_samples={}",
+            p.gpu_total / p.gpu_total_frames as f32,
+            p.gpu_total_frames
+        );
+    } else {
+        out.push_str(" | gpu=unavailable gpu_samples=0");
     }
-    // shadows and depth in detail: culling, cascades, prepass; then the
-    // casters of each cascade
-    let shadow_n = p.gpu_shadow_frames.max(1) as f32;
-    for (key, ms) in ["cull", "shadow0", "shadow1", "shadow2", "depth"].iter().zip(p.gpu_shadow) {
-        let _ = write!(out, " g_{key}={:.3}", ms / shadow_n);
+    if p.gpu_frames > 0 {
+        let gpu_n = p.gpu_frames as f32;
+        for (el, ms) in GpuElement::ALL.iter().zip(p.gpu) {
+            let _ = write!(out, " g_{}={:.3}", el.key(), ms / gpu_n);
+        }
+        let shadow_n = p.gpu_shadow_frames.max(1) as f32;
+        for (key, ms) in ["cull", "shadow0", "shadow1", "shadow2", "depth"].iter().zip(p.gpu_shadow) {
+            let _ = write!(out, " g_{key}={:.3}", ms / shadow_n);
+        }
+        let _ = write!(
+            out,
+            " g_depth_msaa={:.3} g_ssao={:.3} g_contact={:.3} g_bloom={:.3}",
+            p.gpu_depth[1] / gpu_n,
+            p.gpu_ssao / gpu_n,
+            p.gpu_contact / gpu_n,
+            p.gpu_bloom / gpu_n
+        );
     }
-    // with MSAA, the prepass of the multisampled depth (inside g_shadows_depth too)
-    let _ = write!(out, " g_depth_msaa={:.3}", p.gpu_depth[1] / gpu_n);
-    // the ambient occlusion alone (inside g_effects)
-    let _ = write!(out, " g_ssao={:.3}", p.gpu_ssao / gpu_n);
-    // the contact shadows alone (inside g_effects)
-    let _ = write!(out, " g_contact={:.3}", p.gpu_contact / gpu_n);
-    // the bloom levels alone (inside g_post)
-    let _ = write!(out, " g_bloom={:.3}", p.gpu_bloom / gpu_n);
     let _ = write!(out, " | shadow_path={}", aurora_render::shadow_cull::path_name(p.shadow_path));
     for (key, by_cascade, unit) in [
         ("sd", p.shadow[0], 1.0),
@@ -1070,11 +1098,8 @@ mod tests {
         let l = &lines[0];
         assert!(l.starts_with("fps=51.0 frame=19.61"), "{l}");
         assert!(l.contains(" calls=40 "), "{l}");
-        assert!(l.contains(" r_finish=0.00 ") && l.contains(" g_objects=0.000 "), "{l}");
-        assert!(
-            l.contains(" g_depth=0.000 g_depth_msaa=0.000 g_ssao=0.000 g_contact=0.000 g_bloom=0.000 | shadow_path="),
-            "{l}"
-        );
+        assert!(l.contains(" r_finish=0.00 "), "{l}");
+        assert!(l.contains(" | gpu=unavailable gpu_samples=0 | shadow_path="), "{l}");
         assert!(l.contains(" synced=30 anchored=7 "), "{l}");
         assert!(l.contains(" posed=2.0 "), "{l}");
         assert!(l.contains(" records_kb=2.0 "), "{l}");
@@ -1083,6 +1108,26 @@ mod tests {
             "{l}"
         );
         assert!(l.contains(" texture_mb=3 texture_pages=12 pages_mb=5 "), "{l}");
+    }
+
+    #[test]
+    fn repeated_gpu_readbacks_are_counted_once_across_periods() {
+        let mut profile = FrameProfile::new(true);
+        let t = Instant::now();
+        let render = RenderStats {
+            gpu_ms: Some(4.25),
+            gpu_sample_frame: Some(42),
+            ..Default::default()
+        };
+        let mut lines = Vec::new();
+        for i in 0..=110u64 {
+            profile.lap_at(Lap::Sync, t + ms(i * 20));
+            if let Some(line) = profile.end_frame_at(&render, &SceneCounts::default(), &Parts::default(), t + ms(i * 20)) {
+                lines.push(line);
+            }
+        }
+        assert!(lines[0].contains("gpu=4.25 gpu_samples=1"), "{}", lines[0]);
+        assert!(lines[1].contains("gpu=unavailable gpu_samples=0"), "{}", lines[1]);
     }
 
     /// What the blended faces draw and what a lit fragment may walk, and

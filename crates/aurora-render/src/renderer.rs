@@ -34,8 +34,8 @@ use crate::writes::QueueSink;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3, Vec4};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 
 pub const CASCADES: usize = 3;
 const MAX_LIGHTS: usize = 64;
@@ -847,7 +847,13 @@ struct Ssao {
 struct GpuTimer {
     query_set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    readback: Vec<(wgpu::Buffer, Arc<AtomicBool>, bool)>,
+    readback: Vec<(wgpu::Buffer, Arc<AtomicU8>, bool)>,
+    slot_frame: [u64; 3],
+    processed_frame: Option<u64>,
+    last_frame: Option<u64>,
+    last_sample_at: Option<Instant>,
+    invalid_samples: u64,
+    last_timestamps: (u64, u64),
     next: usize,
     period_ns: f32,
     last_ms: Option<f32>,
@@ -1046,7 +1052,7 @@ impl GpuTimer {
                         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     }),
-                    Arc::new(AtomicBool::new(false)),
+                    Arc::new(AtomicU8::new(0)),
                     false,
                 )
             })
@@ -1055,6 +1061,12 @@ impl GpuTimer {
             query_set,
             resolve,
             readback,
+            slot_frame: [0; 3],
+            processed_frame: None,
+            last_frame: None,
+            last_sample_at: None,
+            invalid_samples: 0,
+            last_timestamps: (0, 0),
             next: 0,
             period_ns: queue.get_timestamp_period(),
             last_ms: None,
@@ -1075,14 +1087,40 @@ impl GpuTimer {
     /// Collect finished readbacks.
     fn harvest(&mut self) {
         for (slot, (buf, ready, pending)) in self.readback.iter_mut().enumerate() {
-            if *pending && ready.load(Ordering::Acquire) {
-                if let Ok(view) = buf.get_mapped_range(..) {
+            let status = ready.load(Ordering::Acquire);
+            if *pending && status != 0 {
+                let frame = self.slot_frame[slot];
+                let newest = self.processed_frame.is_none_or(|previous| frame > previous);
+                if newest {
+                    self.processed_frame = Some(frame);
+                    self.last_frame = None;
+                    self.last_sample_at = None;
+                    self.last_ms = None;
+                    self.last_elements = None;
+                    self.last_shadow_parts = None;
+                    self.last_depth = None;
+                    self.last_ssao = None;
+                    self.last_contact = None;
+                    self.last_bloom = None;
+                }
+                if status == 1
+                    && newest
+                    && let Ok(view) = buf.get_mapped_range(..)
+                {
                     let ts: &[u64] = bytemuck::cast_slice(&view[..GPU_TIMESTAMPS as usize * 8]);
                     let ms = |a: u32, b: u32| {
                         let (a, b) = (ts[a as usize], ts[b as usize]);
                         (b.saturating_sub(a) as f64 * self.period_ns as f64 / 1e6) as f32
                     };
-                    if ts[1] > ts[0] {
+                    let finite = ts[0] != u64::MAX && ts[1] != u64::MAX;
+                    let progressing = ts[0] > self.last_timestamps.0 && ts[1] > self.last_timestamps.1;
+                    if finite {
+                        self.last_timestamps.0 = self.last_timestamps.0.max(ts[0]);
+                        self.last_timestamps.1 = self.last_timestamps.1.max(ts[1]);
+                    }
+                    if finite && progressing && ts[0] != 0 && ts[1] > ts[0] {
+                        self.last_frame = Some(frame);
+                        self.last_sample_at = Some(Instant::now());
                         self.last_ms = Some(ms(0, 1));
                         if self.marks {
                             let mut e = [0.0; GpuElement::ALL.len()];
@@ -1104,11 +1142,23 @@ impl GpuTimer {
                                 self.compare.add(self.slot_prepass[slot].get(), times);
                             }
                         }
+                    } else {
+                        self.invalid_samples += 1;
+                        if profile() && (self.invalid_samples == 1 || self.invalid_samples.is_multiple_of(120)) {
+                            log::info!(
+                                "GPU timer: invalid frame={frame} begin={} end={} count={}",
+                                ts[0],
+                                ts[1],
+                                self.invalid_samples
+                            );
+                        }
                     }
                 }
-                buf.unmap();
+                if status == 1 {
+                    buf.unmap();
+                }
                 *pending = false;
-                ready.store(false, Ordering::Release);
+                ready.store(0, Ordering::Release);
             }
         }
     }
@@ -1317,6 +1367,26 @@ impl Marks {
             };
             (w[1].0, ms, waited)
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimerEnd {
+    Post,
+    WorldSelection,
+    Hud,
+    HudSelection,
+}
+
+fn timer_end_point(hud: bool, world_selection: bool, hud_selection: bool) -> TimerEnd {
+    if hud_selection {
+        TimerEnd::HudSelection
+    } else if hud {
+        TimerEnd::Hud
+    } else if world_selection {
+        TimerEnd::WorldSelection
+    } else {
+        TimerEnd::Post
     }
 }
 
@@ -7050,6 +7120,9 @@ impl Backend {
         mark(&mut encoder, MARK_BLOOM_END);
 
         let draw_huds = lists.hud_view.is_some() && self.hud_depth.is_some() && snapshot.is_none_or(|s| s.huds);
+        let draw_world_selection = rg.select_faces.1 > 0 && self.selection.is_some();
+        let draw_hud_selection = hud_select_faces_range.1 > 0 && self.hud_selection.is_some() && self.hud_depth.is_some();
+        let timer_end = timer_end_point(draw_huds, draw_world_selection, draw_hud_selection);
         if world_size != (self.config.width, self.config.height) {
             if self.rlva_scaled.as_ref().is_none_or(|scaled| scaled.size() != world_size) {
                 self.rlva_scaled = Some(crate::rlva::resolution::Scaled::new(&self.device, self.config.format, world_size));
@@ -7081,7 +7154,7 @@ impl Backend {
         // ---- post (tonemap) to the swapchain
         {
             let ts = match (&self.timer, timer_slot) {
-                (Some(t), Some(_)) if !draw_huds && rg.select_faces.1 == 0 => Some(wgpu::RenderPassTimestampWrites {
+                (Some(t), Some(_)) if timer_end == TimerEnd::Post => Some(wgpu::RenderPassTimestampWrites {
                     query_set: &t.query_set,
                     beginning_of_pass_write_index: None,
                     end_of_pass_write_index: Some(1),
@@ -7136,7 +7209,7 @@ impl Backend {
             draw(&mut pass, &self.pipelines.selection_mask, rg.select_faces);
             drop(pass);
             let timestamps = match (&self.timer, timer_slot) {
-                (Some(t), Some(_)) if !draw_huds => Some(wgpu::RenderPassTimestampWrites {
+                (Some(t), Some(_)) if timer_end == TimerEnd::WorldSelection => Some(wgpu::RenderPassTimestampWrites {
                     query_set: &t.query_set,
                     beginning_of_pass_write_index: None,
                     end_of_pass_write_index: Some(1),
@@ -7325,7 +7398,7 @@ impl Backend {
                     stencil_ops: None,
                 }),
                 timestamp_writes: match (&self.timer, timer_slot) {
-                    (Some(t), Some(_)) if hud_select_faces_range.1 == 0 => Some(wgpu::RenderPassTimestampWrites {
+                    (Some(t), Some(_)) if timer_end == TimerEnd::Hud => Some(wgpu::RenderPassTimestampWrites {
                         query_set: &t.query_set,
                         beginning_of_pass_write_index: None,
                         end_of_pass_write_index: Some(1),
@@ -7441,10 +7514,16 @@ impl Backend {
         if let (Some(t), Some(slot)) = (&mut self.timer, timer_slot) {
             let ready = t.readback[slot].1.clone();
             t.readback[slot].2 = true;
+            t.slot_frame[slot] = index;
             t.readback[slot].0.map_async(wgpu::MapMode::Read, .., move |r| {
-                if r.is_ok() {
-                    ready.store(true, Ordering::Release);
-                }
+                let status = match r {
+                    Ok(()) => 1,
+                    Err(error) => {
+                        log::warn!("GPU timer readback failed: {error}");
+                        2
+                    }
+                };
+                ready.store(status, Ordering::Release);
             });
         }
         self.occlusion.after_submit();
@@ -7486,13 +7565,20 @@ impl Backend {
             log::info!("render profile: {out}");
         }
 
-        stats.gpu_ms = self.timer.as_ref().and_then(|t| t.last_ms);
-        stats.gpu_elements = self.timer.as_ref().and_then(|t| t.last_elements);
-        stats.shadow.gpu_ms = self.timer.as_ref().and_then(|t| t.last_shadow_parts);
-        stats.gpu_depth = self.timer.as_ref().and_then(|t| t.last_depth);
-        stats.gpu_ssao = self.timer.as_ref().and_then(|t| t.last_ssao);
-        stats.gpu_contact = self.timer.as_ref().and_then(|t| t.last_contact);
-        stats.gpu_bloom = self.timer.as_ref().and_then(|t| t.last_bloom);
+        // A missing or invalid new readback must not leave an old value on screen.
+        let timer = self
+            .timer
+            .as_ref()
+            .filter(|t| t.last_sample_at.is_some_and(|at| at.elapsed() < Duration::from_secs(2)));
+        stats.gpu_sample_frame = timer.and_then(|t| t.last_frame);
+        stats.gpu_sample_at = timer.and_then(|t| t.last_sample_at);
+        stats.gpu_ms = timer.and_then(|t| t.last_ms);
+        stats.gpu_elements = timer.and_then(|t| t.last_elements);
+        stats.shadow.gpu_ms = timer.and_then(|t| t.last_shadow_parts);
+        stats.gpu_depth = timer.and_then(|t| t.last_depth);
+        stats.gpu_ssao = timer.and_then(|t| t.last_ssao);
+        stats.gpu_contact = timer.and_then(|t| t.last_contact);
+        stats.gpu_bloom = timer.and_then(|t| t.last_bloom);
         if profile_frames && let Some(e) = stats.gpu_elements {
             let mut out = String::new();
             for (el, ms) in GpuElement::ALL.iter().zip(e) {
@@ -7787,6 +7873,19 @@ mod tests {
         let m = reflection_matrix(Vec3::X, -1.0);
         let p = m.transform_point3(Vec3::new(3.0, 2.0, 1.0));
         assert!((p - Vec3::new(-1.0, 2.0, 1.0)).length() < 1e-5);
+    }
+
+    #[test]
+    fn timer_endpoint_uses_the_last_pass_that_is_actually_drawn() {
+        assert_eq!(timer_end_point(false, false, false), TimerEnd::Post);
+        assert_eq!(timer_end_point(false, true, false), TimerEnd::WorldSelection);
+        assert_eq!(timer_end_point(true, false, false), TimerEnd::Hud);
+        assert_eq!(timer_end_point(true, true, false), TimerEnd::Hud);
+        for hud in [false, true] {
+            for world in [false, true] {
+                assert_eq!(timer_end_point(hud, world, true), TimerEnd::HudSelection);
+            }
+        }
     }
 
     #[test]

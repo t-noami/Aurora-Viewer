@@ -1043,17 +1043,20 @@ impl Renderer {
             // no result since the last call (first frame, frame after a
             // capture): the last readbacks stay, the timings are not
             // counted twice
+            let gpu_sample_at = self.last_stats.gpu_sample_at.filter(|at| at.elapsed() < Duration::from_secs(2));
             stats = RenderStats {
-                gpu_ms: self.last_stats.gpu_ms,
-                gpu_elements: self.last_stats.gpu_elements,
+                gpu_ms: gpu_sample_at.and(self.last_stats.gpu_ms),
+                gpu_sample_frame: gpu_sample_at.and(self.last_stats.gpu_sample_frame),
+                gpu_sample_at,
+                gpu_elements: gpu_sample_at.and(self.last_stats.gpu_elements),
                 shadow: ShadowStats {
-                    gpu_ms: self.last_stats.shadow.gpu_ms,
+                    gpu_ms: gpu_sample_at.and(self.last_stats.shadow.gpu_ms),
                     ..Default::default()
                 },
-                gpu_depth: self.last_stats.gpu_depth,
-                gpu_ssao: self.last_stats.gpu_ssao,
-                gpu_contact: self.last_stats.gpu_contact,
-                gpu_bloom: self.last_stats.gpu_bloom,
+                gpu_depth: gpu_sample_at.and(self.last_stats.gpu_depth),
+                gpu_ssao: gpu_sample_at.and(self.last_stats.gpu_ssao),
+                gpu_contact: gpu_sample_at.and(self.last_stats.gpu_contact),
+                gpu_bloom: gpu_sample_at.and(self.last_stats.gpu_bloom),
                 occluded: self.last_stats.occluded,
                 visible_objects: self.last_stats.visible_objects,
                 gpu_cull: self.last_stats.gpu_cull,

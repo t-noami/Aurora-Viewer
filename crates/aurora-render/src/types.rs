@@ -1338,6 +1338,10 @@ pub struct RenderStats {
     pub index_used: u64,
     pub records: u32,
     pub gpu_ms: Option<f32>,
+    /// Frame associated with the GPU readback, shared by all GPU timings.
+    pub gpu_sample_frame: Option<u64>,
+    /// When the readback completed, used to expire stale display values.
+    pub gpu_sample_at: Option<std::time::Instant>,
     /// CPU time the main thread spent on the frame's rendering (ms): the
     /// whole encoding when the renderer runs on it, only the frame packet
     /// with a render thread.

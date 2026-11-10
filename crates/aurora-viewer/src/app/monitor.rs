@@ -323,6 +323,7 @@ impl App {
             parts: FrameParts {
                 cpu: cpu_parts,
                 gpu: gpu_parts,
+                gpu_total_ms: r.gpu_ms.map(|latest| frame.as_ref().and_then(|f| f.gpu_total_ms).unwrap_or(latest)),
                 render_thread: r.render_thread.then_some(self.perf.render_thread_shown),
             },
             memory,

@@ -26,6 +26,7 @@ $ErrorActionPreference = 'Stop'
 
 $pages = @(
     @{ Section = $null; Page = 'Home'; Title = 'Home'; Source = 'README.md' }
+    @{ Section = 'For testers'; Page = 'Offline-demo-safety'; Title = 'Offline demo launch safety'; Source = 'docs/OFFLINE_DEMO_LAUNCH_SAFETY.md' }
     @{ Section = 'For testers'; Page = 'Reporting-bugs'; Title = 'Reporting bugs'; Source = 'docs/BUG_REPORTING.md' }
     @{ Section = 'For testers'; Page = 'Installing-on-Linux'; Title = 'Installing on Linux'; Source = 'docs/LINUX.md' }
     @{ Section = 'For testers'; Page = 'Updates'; Title = 'Updates'; Source = 'docs/UPDATES.md' }
@@ -42,6 +43,7 @@ $pages = @(
     @{ Section = 'Contributing'; Page = 'Branding'; Title = 'Branding and interface'; Source = 'docs/BRANDING.md' }
     @{ Section = 'Technical'; Page = 'Architecture'; Title = 'Architecture'; Source = 'ARCHITECTURE.md' }
     @{ Section = 'Technical'; Page = 'RLVa'; Title = 'RLVa implementation status'; Source = 'docs/RLVA.md' }
+    @{ Section = 'Technical'; Page = 'Metal-performance-plan'; Title = 'Metal performance repair'; Source = 'docs/METAL_PERFORMANCE_REPAIR_PLAN.md' }
     @{ Section = 'Technical'; Page = 'Metal-investigation-handoff'; Title = 'Metal investigation handoff'; Source = 'docs/METAL_INVESTIGATION_HANDOFF.md' }
     @{ Section = 'Technical'; Page = 'macOS-port-plan'; Title = 'macOS port plan'; Source = 'docs/MACOS_PORT_PLAN.md' }
     @{ Section = 'Technical'; Page = 'Licences'; Title = 'Licences and notices'; Source = 'NOTICE.md' }
