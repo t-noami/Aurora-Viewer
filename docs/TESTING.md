@@ -14,6 +14,8 @@ $env:AURORA_DEMO_MAP = "1"          # a scenario, if needed
 cargo run -p aurora-viewer -- --title "Test my-task"
 ```
 
+For macOS demo captures, follow the [offline demo procedure](OFFLINE_DEMO_LAUNCH_SAFETY.md) to confirm which process owns the window.
+
 The logs are in `%LOCALAPPDATA%\Aurora\AuroraViewer\data\logs\`.
 
 For localisation, launch the same scenario with `--language en`, then
@@ -8541,7 +8543,11 @@ What the inventory must show with these scenarios:
 - **`AURORA_PROFILE=1`**: one `perf summary` line per second, plus one
   `perf settings` line when the settings change. The background fps cap
   ("Limit when unfocused") is ignored: a window without focus is still
-  measured at full speed.
+  measured at full speed. The GPU interval ends at the last timed post,
+  HUD or selection pass, before egui. `gpu_samples` counts distinct valid
+  readbacks in the period. With none, the log reports `gpu=unavailable`.
+  The interval can include scheduling gaps. Metal readings still need an
+  independent comparison with native GPU timing.
 - **`AURORA_PROFILE_FRAMES=1`**: in addition, one `render profile` line and
   one `gpu profile` line per frame (renderer steps and GPU time per element
   of each frame).

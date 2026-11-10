@@ -18,6 +18,7 @@ pub const HISTORY: usize = 120;
 pub struct FrameParts {
     pub cpu: [f32; 7],
     pub gpu: Option<[f32; 7]>,
+    pub gpu_total_ms: Option<f32>,
     /// The render thread's time per frame (ms); None without one.
     pub render_thread: Option<f32>,
 }
@@ -273,7 +274,7 @@ impl Point {
             cpu: s.cpu.as_ref().map(|c| c.process),
             media_cpu: media.map(|v| v as f32),
             machine: s.cpu.as_ref().and_then(|c| c.machine),
-            gpu_ms: s.parts.gpu.map(|g| g.iter().sum()),
+            gpu_ms: s.parts.gpu_total_ms,
             ram: s.memory.map(|m| m.working_set as f64),
             vram: s.vram.usage.map(|v| v as f64),
             net_in: s.net.in_kbps,

@@ -160,7 +160,7 @@ fn tiles(p: &Palette, m: &Monitor, s: &Snapshot) -> Vec<Tile> {
     });
 
     // graphics card
-    let gpu = s.parts.gpu.map(|g| g.iter().sum::<f32>());
+    let gpu = s.parts.gpu_total_ms;
     let gpu_series = h.series(|pt| pt.gpu_ms.map(f64::from));
     let g = s.parts.gpu.unwrap_or_default();
     out.push(Tile {
@@ -169,7 +169,7 @@ fn tiles(p: &Palette, m: &Monitor, s: &Snapshot) -> Vec<Tile> {
         right: tr!("monitor-fps", fps = aurora_i18n::number(f64::from(s.fps), 0)),
         value: gpu.map_or("–".into(), |v| aurora_i18n::number(f64::from(v), 1)),
         unit: tr!("monitor-unit-ms-frame").to_owned(),
-        sub: if gpu.is_some() {
+        sub: if s.parts.gpu.is_some() {
             tr!(
                 "monitor-tile-gpu-sub",
                 shadows = fmt::ms(f64::from(g[0])),
@@ -369,26 +369,29 @@ fn frame_card(ui: &mut egui::Ui, p: &Palette, s: &Snapshot) {
         let colors = draw::part_colors(p);
         let cpu = s.parts.cpu;
         let busy: f32 = cpu[..6].iter().sum();
-        let gpu_total = s.parts.gpu.map(|g| g.iter().sum::<f32>());
+        let gpu_total = s.parts.gpu_total_ms;
         let limit = if cpu[6] > s.frame_ms * 0.3 {
             tr!("monitor-limited-waiting")
-        } else if gpu_total.is_some_and(|g| g > busy) {
-            tr!("monitor-limited-gpu")
+        } else if let Some(parts) = s.parts.gpu {
+            if parts.iter().sum::<f32>() > busy {
+                tr!("monitor-limited-gpu")
+            } else {
+                tr!("monitor-limited-cpu")
+            }
         } else {
-            tr!("monitor-limited-cpu")
+            // An interval between timestamps can include idle gaps.
+            ""
         };
         let thread = s.parts.render_thread.map_or(String::new(), |ms| {
             format!(" · {}", tr!("monitor-render-thread", ms = fmt::ms(f64::from(ms))))
         });
-        draw::card_title(
-            ui,
-            p,
-            tr!("monitor-frame-time"),
-            &format!(
-                "{} · {limit}{thread}",
-                tr!("monitor-fps", fps = aurora_i18n::number(f64::from(s.fps), 0))
-            ),
-        );
+        let mut subtitle = tr!("monitor-fps", fps = aurora_i18n::number(f64::from(s.fps), 0));
+        if !limit.is_empty() {
+            subtitle.push_str(" · ");
+            subtitle.push_str(limit);
+        }
+        subtitle.push_str(&thread);
+        draw::card_title(ui, p, tr!("monitor-frame-time"), &subtitle);
         let names = crate::ui::perf::cpu_part_names();
         bar_block(
             ui,
@@ -422,6 +425,9 @@ fn frame_card(ui: &mut egui::Ui, p: &Palette, s: &Snapshot) {
             }
             None => {
                 draw::text(ui, tr!("ui-perf-gpu-rendering"), draw::BODY, p.ink);
+                if let Some(total) = gpu_total {
+                    draw::text(ui, &fmt::ms(f64::from(total)), draw::BODY, p.ink);
+                }
                 draw::text(
                     ui,
                     tr!("ui-perf-per-item-details-unavailable-with-this-graphics-card"),

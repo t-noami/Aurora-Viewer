@@ -12,6 +12,10 @@ As of 10 November 2026, the cause of the reported 4K slowdown remains open. The 
 
 These notes are dated records. Their local log and capture names identify historical evidence. This archival integration involved Git inspection only. It made no new measurements.
 
+## Implementation adopted on the fork
+
+The active renderer and frame profiler use the later fork repair's readback identity, freshness handling and pass selection. The resource monitor uses the distinct-sample average for the total GPU interval and keeps stage timings separate. Missing per-stage timing leaves the CPU/GPU bottleneck attribution undetermined. The [ignored diagnostic tests](../crates/aurora-render/tests/metal_timestamp_repro.rs) are in the render crate. The earlier probe that added opaque-pass timestamps remains archived because its instrumentation changed the workload and its readings went stale. See the [repair plan](METAL_PERFORMANCE_REPAIR_PLAN.md) and [offline demo procedure](OFFLINE_DEMO_LAUNCH_SAFETY.md).
+
 ## Source inventory and recovery
 
 The main checkout was clean at `b6fbd94c`. The clean `macos-metal` checkout at `397f0e63` had the same tree as fork PR #1 at `b8fee438`. Its original commits, including the packaging script and CI changes, are retained in the fork history. The six other checkouts had the following independent changes. Each patch contains **all tracked changes** against the named base. Copy each listed **new file** to its original repository path after applying that patch.

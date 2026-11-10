@@ -1,0 +1,114 @@
+# Metal performance repair plan
+
+The fork now includes the frame-tagged readback changes from the October timing investigation, their regression tests and the standalone render/compute timestamp diagnostic. They help reject invalid samples. Accurate native GPU durations, a matched 4K baseline and real-scene acceptance at 120 FPS remain open. [Investigation handoff](METAL_INVESTIGATION_HANDOFF.md)
+
+## Baselines and next measurements
+
+The fork and official v0.8.3 (`7030025c`) are separate baselines. Record the exact commit, build profile and selected backend for each comparison. The original v0.8.3 test and documentation variants can be restored from the [source inventory](METAL_INVESTIGATION_HANDOFF.md#source-inventory-and-recovery).
+
+1. Follow the [offline demo procedure](OFFLINE_DEMO_LAUNCH_SAFETY.md). Discard the disputed 65.2 FPS sample. Keep the owned process, demo marker and capture together.
+2. Compare standard and 600-object scenes at matched physical resolution, quality and camera position. Record requested and selected present modes and display refresh. Exclude warm-up, zero-draw periods and capture overhead. Report elapsed-time FPS separately from frame-time percentiles.
+3. Compare timestamp readbacks with a native Metal trace before attributing cost to the GPU. A long drawable-acquisition wait can reflect presentation pacing or GPU backlog. The official texture repair restored previously missing work, which makes its before/after FPS an unequal-quality comparison.
+4. Only the human validates the real scene. Record the settings, physical resolution, hardware and texture completeness alongside the result. The performance target remains open until measured.
+
+## Evidence and unresolved questions
+
+The performance investigation recorded stale GPU samples and timestamp pairs whose end precedes their start. Previously reported GPU medians (including 15.84 and 24.15 ms) must not establish a GPU bottleneck. The real-scene cause remains unconfirmed.
+
+The inspected performance worktree routes timestamps through multiple command encoders, finishes encoders in parallel, and selects the ending timestamp according to HUD, selection and SMAA conditions. Query resolution occurs before the final egui rendering. These observations motivate an audit; they do not establish that parallel encoding or a particular branch causes the invalid samples.
+
+The default CPU draw-list path measured about 60 FPS and the experimental fixed-count GPU-culling path about 30 FPS in one matched offline comparison. Presentation pacing limits interpretation. Keep the experiment opt-in until representative performance and visual checks justify it.
+
+The existing renderer already uses Discard in some passes and reuses upload buffers. The installed wgpu-hal 30.0.1 Metal backend already contains autorelease pools. Its buffer storage selection uses mapping usages to select Shared versus Private; removing COPY_DST alone is not a general storage-mode optimization. Its texture implementation selects Memoryless for transient usage when the device supports it. Audit exact version behaviour rather than copying generic examples.
+
+## Design decisions from the research
+
+| Topic | Decision |
+|---|---|
+| Load/Store | Use Clear only when previous contents are unnecessary; use Discard only after the final consumer. Do not replace compositing Load operations indiscriminately. |
+| Transient targets | Consider only attachments with no cross-pass preservation, sampling or copy requirement, subject to actual format and feature support. Discard alone is not proof of memoryless allocation. |
+| Pass merging | Merge only compatible passes without intervening resource dependencies. Preserve water refraction, depth consumers and ordering. |
+| MSAA | Preserve existing AA options. Do not force 4x or assume MSAA is free. |
+| Presentation | Preserve VSync preferences and capability-based fallback. Do not force FIFO or confuse display refresh with maximum render throughput. |
+| UMA transfers | Prefer improvements to the shared upload path. Direct mapping is an optional measured optimization, not an assumption of zero cost. |
+| Autorelease pools | Audit render and helper threads plus existing HAL coverage; add scopes only where ownership and lifetime evidence justify them. |
+| Backend selection | Keep existing platform policy. Changing to PRIMARY is not by itself a performance fix and must not silently change the Windows backend. |
+| Shader layout | Follow WGSL alignment and size rules; bytemuck alone does not prove shader-layout compatibility. Preserve explicit padding and verify relevant layouts. |
+| Scope | Preserve supported desktop platforms. Mobile/Web support and a separate native Metal renderer are not prerequisites for this repair. |
+
+## 1. Repair and independently validate GPU timing
+
+Primary areas: `crates/aurora-render/src/renderer.rs`, `crates/aurora-viewer/src/frame_profile.rs`, and performance UI consumers.
+
+- Associate frame identifiers, query ranges and readback slots. Aggregate each completed sample once.
+- Require matching begin/end samples from the same frame. Distinguish unavailable, invalid and stale data from zero workload.
+- Audit query initialization, writes, resolve, submission, readback and reuse across encoders and frames in flight. Check actual wgpu Metal lowering and query reset behaviour.
+- Build a minimal comparison of single versus multiple encoders and serial versus parallel finishing. Treat serialized execution as a diagnostic experiment, not a default production fix.
+- Exercise ending-timestamp routes with HUDs, selection and SMAA on/off. Define scene timing separately from a UI-inclusive GPU frame interval.
+- Compare with Xcode GPU capture and Instruments Metal System Trace. Check tool availability first; document any unavailable independent measurement.
+- Measure timing enabled versus disabled. Never add a blocking GPU wait to the normal frame loop to make diagnostics easier.
+
+Exit: several minutes of progressing samples; invalid/old samples excluded; tested routing cases; no unexplained mismatch with native observations; measurement overhead recorded. If the defect reproduces in a minimal upstream case, isolate that case and choose a narrow workaround or dependency fix based on evidence.
+
+## 2. Establish a reproducible CPU/GPU/presentation baseline
+
+Record scene-update, draw-list generation, command encoding/finish/submit, GPU stages, surface acquisition and presentation separately. Where stages overlap, do not sum them as serial frame costs. Record scene generation identifiers so presentation of repeated content is distinguishable from new scene production.
+
+Use the standard demo, the 600-object streaming scene, a draw-heavy scene and scenes containing water, transparency and shadows. Keep camera, physical resolution, graphics settings, AA, loading state, foreground visibility and object counts fixed. Record backend, device features, hardware, OS/toolchain, build revision/profile, refresh rate, selected present mode, transfer bytes, draw counts and memory observations.
+
+Use the default development profile for routine checks; use release only for deliberate performance comparisons. Compare repeated matched runs and retain frame-time median and p95, sample counts, captures and diagnostic logs in the owning worktree's ignored `.scratch/` directory. Exclude warm-up explicitly. If presentation caps the result, use an offscreen render-throughput test as supplementary evidence, not as real-scene acceptance.
+
+Exit: evidence identifies the dominant interval and controlled experiments distinguish its leading causes. Missing Windows hardware/data must be stated, not replaced with an assumed equivalent workload.
+
+## 3. Reduce unnecessary TBDR bandwidth and pass boundaries
+
+Map each render target's producer, consumers, last use, format, sample count, usages, load/store operations and resolve/copy operations before editing it.
+
+- Remove unnecessary loads, stores, intermediate copies and resolves.
+- Apply transient attachments only where the complete lifetime permits it.
+- Merge compatible passes while preserving resource hazards and visible behaviour.
+- Measure the depth prepass on Metal; retain consumers such as occlusion and depth-dependent effects unless an equivalent replacement is validated.
+- Preserve Aurora's reversed depth convention. Do not import example Clear(1.0)/Less settings into its Clear(0.0) path.
+- Measure each change independently before combining it with other optimizations.
+
+Exit: reproducible reduction in relevant pass time or bandwidth cost, with no regression in water, transparency, shadows, AA, selection, HUDs, postprocessing or capture. Recheck Windows/Linux instead of assuming a tile-GPU optimization is universally faster.
+
+## 4. Optimize the measured bottleneck
+
+### CPU command generation and draw submission
+
+If this dominates, reduce state changes and native draw calls through batching and suitable instancing. Distinguish GPU visibility calculation from command submission savings: fixed-count indirect drawing may retain many native calls. Investigate Metal Indirect Command Buffers only after determining what wgpu exposes and whether backend-specific integration can preserve synchronization, resource ownership and maintainability. Keep the working fallback.
+
+### Uploads and dynamic data
+
+If transfers or allocation dominate, inspect `crates/aurora-render/src/upload.rs`; reuse existing mechanisms before replacing them with StagingBelt. Aggregate small updates, remove redundant uploads and temporary allocations, and measure bytes and time. Use write_buffer_with where it avoids an actual intermediate allocation. Consider mappable primary buffers only behind feature checks and measured benefit; rotate completed buffers, unmap before GPU use and never overwrite in-flight data.
+
+### Memory lifetime
+
+If resident memory grows, trace render/helper-thread Objective-C lifetimes and existing autorelease-pool coverage. Separate caches, allocations awaiting GPU completion and leaked objects. Add justified pool boundaries and repeat a long-running load/unload test; do not equate an advisory working-set threshold with free memory.
+
+Exit: matched-run improvement survives repetition and long-session testing, without frame-loop waits, unbounded memory growth or cross-platform regressions.
+
+## 5. Validate surface lifecycle and presentation
+
+Audit `main_thread.rs`, `render_thread.rs`, `present.rs` and the viewer window-event path. Verify physical-size changes and scale-factor changes, display migration, minimization/restore, occlusion, zero-size windows and surface recovery. Avoid needless reconfiguration, and record actual selected mode and dimensions. Do not change colour space, backend or VSync defaults merely to improve a benchmark.
+
+Exit: correct rendering and stable recovery across those transitions, with timing data that separates acquisition/presentation pacing from CPU and GPU execution.
+
+## Delivery and acceptance gates
+
+Implement in separate reviewable units: timing correctness; baseline/native instrumentation; targeted pass/target improvements; measured submission/upload improvements; lifecycle fixes where required. Prioritize sections 3 and 4 using section 2 results rather than committing to a wholesale rewrite.
+
+For each viewer-changing unit: run appropriate workspace tests, formatting, Clippy and the required project checks; run affected and neighbouring demo scenarios; inspect before/after captures. Record unavailable checks explicitly. Changes to diagnostic variables must update TESTING.md; new modules must update ARCHITECTURE.md.
+
+Final human validation uses comparable real-scene camera, physical resolution, settings and loading state, recording machine differences. At least 120 FPS is required; a demo-only improvement or 60 FPS does not close the task. If a hardware or presentation limit prevents the target, supply measured evidence and leave acceptance open for the human's decision. Follow the repository's human-validation, PR, review and merge gates.
+
+## Sources and interpretation
+
+The supplied research was reviewed as design input; its examples are not a version-matched patch. In particular, universal Clear/FIFO/4x-MSAA rules, free-MSAA claims, and storage-placement guarantees from removing COPY_DST are not adopted. No external discussion or private conversation needs to be published with this document.
+
+- [wgpu 30.0.0 Buffer: mapping, staging and CPU/GPU exclusivity](https://docs.rs/wgpu/30.0.0/wgpu/struct.Buffer.html).
+- [Apple: Explore Live GPU Profiling with Metal Counters](https://developer.apple.com/videos/play/tech-talks/10001/): stage-boundary sampling, sample validity and CPU/GPU timelines.
+- [wgpu-hal 30.0.1 Metal device implementation](https://github.com/gfx-rs/wgpu/blob/v30.0.1/wgpu-hal/src/metal/device.rs): inspect storage modes and transient support against the dependency actually used.
+- [wgpu-hal 30.0.1 Metal command implementation](https://github.com/gfx-rs/wgpu/blob/v30.0.1/wgpu-hal/src/metal/command.rs): inspect timestamp lowering and autorelease scopes.
+- [wgpu-hal 30.0.1 Metal surface implementation](https://github.com/gfx-rs/wgpu/blob/v30.0.1/wgpu-hal/src/metal/surface.rs): inspect drawable acquisition and presentation.
