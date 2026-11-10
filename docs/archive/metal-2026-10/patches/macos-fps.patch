@@ -1,0 +1,316 @@
+diff --git a/TASKS.md b/TASKS.md
+index 1b68c3087f367f2c0e5682aaebd8e7b64fb81bc5..60c5df82037c2e280f66ab693ce869cfc4e4a0d2 100644
+--- a/TASKS.md
++++ b/TASKS.md
+@@ -1072,0 +1073 @@ What comes before the rest (requested by the human).
++- 🔧 macOS performance regression (human report, 29 October 2026; task `macos-fps`): the human reports about 10 FPS on Mac versus 120–240 FPS on Windows at the same location. Target at least 120 FPS, aiming for the reported Windows range with comparable settings and physical resolution; 30–60 FPS demos are not acceptance. Instrument Metal frame, GPU and presentation costs; isolate the causes with controlled tests, implement and measure fixes, and obtain human validation in the real scene. See the performance objective in `docs/MACOS_PORT_PLAN.md`.
+@@ -1079 +1080 @@ What comes before the rest (requested by the human).
+-  - 🔧 Metal GPU culling experiment (`AURORA_METAL_GPU_CULL=1`): GPU-generated draw arguments use zero-filled fixed-count indirect draws when Metal lacks indirect-count draws; the default remains CPU draw lists. On M2 Pro, the ignored GPU bin/reference test passed with stale argument slots prefilled, and the filtered GPU-culling tests passed. CPU and experimental 600-object offline demos were repeated sequentially after loading with the human keeping the windows visible: median frame 32.32 / 33.34 ms, median render-thread frame 34.84 / 34.88 ms (16 / 15 one-second samples, background frame cap near 30 fps); both produced inspected screenshots and reported texture-page exhaustion. This limited test shows no clear speedup, and the cap and texture failures prevent a conclusive comparison. More representative visual and uncapped performance validation is required before enabling this path.
++  - 🔧 Metal GPU culling experiment (`AURORA_METAL_GPU_CULL=1`): GPU-generated draw arguments use zero-filled fixed-count indirect draws when Metal lacks indirect-count draws; the default remains CPU draw lists. On M2 Pro, the ignored GPU bin/reference test passed with stale argument slots prefilled, and the filtered GPU-culling tests passed. CPU and experimental 600-object offline demos were repeated sequentially after loading with the human keeping the windows visible: median frame 32.32 / 33.34 ms, median render-thread frame 34.84 / 34.88 ms (16 / 15 one-second samples, approximately 30 FPS presentation pacing of unknown cause); both produced inspected screenshots and reported texture-page exhaustion. This limited test shows no clear speedup, and the cap and texture failures prevent a conclusive comparison. More representative visual and uncapped performance validation is required before enabling this path.
+diff --git a/crates/aurora-render/src/main_thread.rs b/crates/aurora-render/src/main_thread.rs
+index 32ab0597cf729fd2a93048f112fee570cc5ff5f7..67c0250bdb0c82b9b6c0002fdaec6b2e9bd351d5 100644
+--- a/crates/aurora-render/src/main_thread.rs
++++ b/crates/aurora-render/src/main_thread.rs
+@@ -1047,0 +1048,2 @@ impl Renderer {
++                gpu_scene_a_ms: self.last_stats.gpu_scene_a_ms,
++                gpu_sample_serial: self.last_stats.gpu_sample_serial,
+diff --git a/crates/aurora-render/src/renderer.rs b/crates/aurora-render/src/renderer.rs
+index 4b4f81767562474073b55373495da5cca6bab8d5..5c8522d9e63c8f7144c9cd765b2db87c2645e2cf 100644
+--- a/crates/aurora-render/src/renderer.rs
++++ b/crates/aurora-render/src/renderer.rs
+@@ -38 +38 @@ use std::sync::atomic::{AtomicBool, Ordering};
+-use std::time::Instant;
++use std::time::{Duration, Instant};
+@@ -853,0 +854,5 @@ struct GpuTimer {
++    last_sample_at: Option<Instant>,
++    sample_serial: u64,
++    invalid_samples: u64,
++    /// Scene A pass time when only pass-boundary timestamps are available.
++    last_scene_a_ms: Option<f32>,
+@@ -931 +936 @@ impl PrepassCompare {
+-const GPU_TIMESTAMPS: u32 = 2 + GPU_MARKS;
++const GPU_TIMESTAMPS: u32 = 4 + GPU_MARKS;
+@@ -932,0 +938,2 @@ const GPU_MARKS: u32 = 25;
++const SCENE_A_BEGIN: u32 = 27;
++const SCENE_A_END: u32 = 28;
+@@ -1060,0 +1068,4 @@ impl GpuTimer {
++            last_sample_at: None,
++            sample_serial: 0,
++            invalid_samples: 0,
++            last_scene_a_ms: None,
+@@ -1086,0 +1098,5 @@ impl GpuTimer {
++                        self.last_sample_at = Some(Instant::now());
++                        self.sample_serial += 1;
++                        if profile_scene_a() && !self.marks && ts[SCENE_A_END as usize] > ts[SCENE_A_BEGIN as usize] {
++                            self.last_scene_a_ms = Some(ms(SCENE_A_BEGIN, SCENE_A_END));
++                        }
+@@ -1106,0 +1123,13 @@ impl GpuTimer {
++                    } else {
++                        self.invalid_samples += 1;
++                        if profile() && (self.invalid_samples == 1 || self.invalid_samples.is_multiple_of(120)) {
++                            log::info!(
++                                "gpu timer: invalid timestamp pair (count {}, valid {}, begin {}, end {}, scene begin {}, scene end {})",
++                                self.invalid_samples,
++                                self.sample_serial,
++                                ts[0],
++                                ts[1],
++                                ts[SCENE_A_BEGIN as usize],
++                                ts[SCENE_A_END as usize]
++                            );
++                        }
+@@ -1283,0 +1313,6 @@ fn profile() -> bool {
++/// Extra pass-boundary timestamps are opt-in because they can affect timing.
++fn profile_scene_a() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| profile() && std::env::var_os("AURORA_PROFILE_SCENE_A").is_some())
++}
++
+@@ -6572 +6607,9 @@ impl Backend {
+-                timestamp_writes: None,
++                timestamp_writes: self
++                    .timer
++                    .as_ref()
++                    .filter(|t| profile_scene_a() && !t.marks && timer_slot.is_some())
++                    .map(|t| wgpu::RenderPassTimestampWrites {
++                        query_set: &t.query_set,
++                        beginning_of_pass_write_index: Some(SCENE_A_BEGIN),
++                        end_of_pass_write_index: Some(SCENE_A_END),
++                    }),
+@@ -7052,0 +7096,10 @@ impl Backend {
++        if profile() && index % 120 == 0 {
++            log::info!(
++                "gpu timer routing: huds={draw_huds} world_selection={} world_selection_renderer={} hud_selection={} hud_selection_renderer={} smaa={}",
++                rg.select_faces.1,
++                self.selection.is_some(),
++                hud_select_faces_range.1,
++                self.hud_selection.is_some(),
++                self.smaa_targets.is_some()
++            );
++        }
+@@ -7445,2 +7498,2 @@ impl Backend {
+-                if r.is_ok() {
+-                    ready.store(true, Ordering::Release);
++                if let Err(e) = r {
++                    log::warn!("gpu timer readback failed: {e}");
+@@ -7447,0 +7501 @@ impl Backend {
++                ready.store(true, Ordering::Release);
+@@ -7489,7 +7543,13 @@ impl Backend {
+-        stats.gpu_ms = self.timer.as_ref().and_then(|t| t.last_ms);
+-        stats.gpu_elements = self.timer.as_ref().and_then(|t| t.last_elements);
+-        stats.shadow.gpu_ms = self.timer.as_ref().and_then(|t| t.last_shadow_parts);
+-        stats.gpu_depth = self.timer.as_ref().and_then(|t| t.last_depth);
+-        stats.gpu_ssao = self.timer.as_ref().and_then(|t| t.last_ssao);
+-        stats.gpu_contact = self.timer.as_ref().and_then(|t| t.last_contact);
+-        stats.gpu_bloom = self.timer.as_ref().and_then(|t| t.last_bloom);
++        let fresh_timer = self
++            .timer
++            .as_ref()
++            .filter(|t| t.last_sample_at.is_some_and(|at| at.elapsed() < Duration::from_secs(2)));
++        stats.gpu_ms = fresh_timer.and_then(|t| t.last_ms);
++        stats.gpu_scene_a_ms = fresh_timer.and_then(|t| t.last_scene_a_ms);
++        stats.gpu_sample_serial = fresh_timer.map_or(0, |t| t.sample_serial);
++        stats.gpu_elements = fresh_timer.and_then(|t| t.last_elements);
++        stats.shadow.gpu_ms = fresh_timer.and_then(|t| t.last_shadow_parts);
++        stats.gpu_depth = fresh_timer.and_then(|t| t.last_depth);
++        stats.gpu_ssao = fresh_timer.and_then(|t| t.last_ssao);
++        stats.gpu_contact = fresh_timer.and_then(|t| t.last_contact);
++        stats.gpu_bloom = fresh_timer.and_then(|t| t.last_bloom);
+diff --git a/crates/aurora-render/src/types.rs b/crates/aurora-render/src/types.rs
+index c842ed6cdb0b41a08c3d7bcd9c949a4d32e7048d..9eb2a0b994771f482b1842439c3425941bdd76f7 100644
+--- a/crates/aurora-render/src/types.rs
++++ b/crates/aurora-render/src/types.rs
+@@ -1340,0 +1341,4 @@ pub struct RenderStats {
++    /// Scene A pass elapsed GPU time where per-draw timestamps are unavailable.
++    pub gpu_scene_a_ms: Option<f32>,
++    /// Monotonically increasing identifier of the last valid GPU readback.
++    pub gpu_sample_serial: u64,
+diff --git a/crates/aurora-viewer/src/app/monitor.rs b/crates/aurora-viewer/src/app/monitor.rs
+index db41a1407b3bdf50da9fa8202e5ede4683514cef..6f2855970310da8e0d04e0d59ae01026cf3f0c5a 100644
+--- a/crates/aurora-viewer/src/app/monitor.rs
++++ b/crates/aurora-viewer/src/app/monitor.rs
+@@ -325,0 +326 @@ impl App {
++                gpu_total_ms: frame.as_ref().and_then(|f| f.gpu_total_ms).or(r.gpu_ms),
+diff --git a/crates/aurora-viewer/src/frame_profile.rs b/crates/aurora-viewer/src/frame_profile.rs
+index 0b041b5c984c8754b22fe214868dd04edf6e5388..5e69e077e324b95f6edf3a918e0e7e4aaf6c228d 100644
+--- a/crates/aurora-viewer/src/frame_profile.rs
++++ b/crates/aurora-viewer/src/frame_profile.rs
+@@ -395,0 +396,5 @@ struct Period {
++    gpu_total: f32,
++    gpu_total_frames: u32,
++    gpu_sample_serial: u64,
++    gpu_scene_a: f32,
++    gpu_scene_a_frames: u32,
+@@ -627,0 +633,9 @@ impl FrameProfile {
++        if let Some(ms) = render.gpu_ms {
++            p.gpu_total += ms;
++            p.gpu_total_frames += 1;
++            p.gpu_sample_serial = render.gpu_sample_serial;
++        }
++        if let Some(ms) = render.gpu_scene_a_ms {
++            p.gpu_scene_a += ms;
++            p.gpu_scene_a_frames += 1;
++        }
+@@ -720,0 +735,2 @@ pub struct Averages {
++    /// Elapsed GPU time between the first and last timed passes.
++    pub gpu_total_ms: Option<f32>,
+@@ -735,0 +752 @@ impl Averages {
++            gpu_total_ms: (p.gpu_total_frames > 0).then(|| p.gpu_total / p.gpu_total_frames as f32),
+@@ -757,0 +775 @@ impl Averages {
++            gpu_total_ms: gpu.map(|g| g.iter().sum()),
+@@ -935,4 +953,28 @@ fn summary(p: &Period, elapsed: Duration) -> String {
+-    let gpu_n = p.gpu_frames.max(1) as f32;
+-    let _ = write!(out, " | gpu={:.2}", p.gpu.iter().sum::<f32>() / gpu_n);
+-    for (el, ms) in GpuElement::ALL.iter().zip(p.gpu) {
+-        let _ = write!(out, " g_{}={:.3}", el.key(), ms / gpu_n);
++    if p.gpu_total_frames > 0 {
++        let _ = write!(out, " | gpu={:.2}", p.gpu_total / p.gpu_total_frames as f32);
++        let _ = write!(out, " gpu_sample={}", p.gpu_sample_serial);
++    } else {
++        out.push_str(" | gpu=unavailable");
++    }
++    if p.gpu_frames > 0 {
++        out.push_str(" gpu_parts=available");
++        let gpu_n = p.gpu_frames as f32;
++        for (el, ms) in GpuElement::ALL.iter().zip(p.gpu) {
++            let _ = write!(out, " g_{}={:.3}", el.key(), ms / gpu_n);
++        }
++        // shadows and depth in detail: culling, cascades, prepass; then the
++        // casters of each cascade
++        let shadow_n = p.gpu_shadow_frames.max(1) as f32;
++        for (key, ms) in ["cull", "shadow0", "shadow1", "shadow2", "depth"].iter().zip(p.gpu_shadow) {
++            let _ = write!(out, " g_{key}={:.3}", ms / shadow_n);
++        }
++        // with MSAA, the prepass of the multisampled depth (inside g_shadows_depth too)
++        let _ = write!(out, " g_depth_msaa={:.3}", p.gpu_depth[1] / gpu_n);
++        // the ambient occlusion alone (inside g_effects)
++        let _ = write!(out, " g_ssao={:.3}", p.gpu_ssao / gpu_n);
++        // the contact shadows alone (inside g_effects)
++        let _ = write!(out, " g_contact={:.3}", p.gpu_contact / gpu_n);
++        // the bloom levels alone (inside g_post)
++        let _ = write!(out, " g_bloom={:.3}", p.gpu_bloom / gpu_n);
++    } else {
++        out.push_str(" gpu_parts=unavailable");
+@@ -940,5 +982,2 @@ fn summary(p: &Period, elapsed: Duration) -> String {
+-    // shadows and depth in detail: culling, cascades, prepass; then the
+-    // casters of each cascade
+-    let shadow_n = p.gpu_shadow_frames.max(1) as f32;
+-    for (key, ms) in ["cull", "shadow0", "shadow1", "shadow2", "depth"].iter().zip(p.gpu_shadow) {
+-        let _ = write!(out, " g_{key}={:.3}", ms / shadow_n);
++    if p.gpu_scene_a_frames > 0 {
++        let _ = write!(out, " gpu_scene_a={:.2}", p.gpu_scene_a / p.gpu_scene_a_frames as f32);
+@@ -946,8 +984,0 @@ fn summary(p: &Period, elapsed: Duration) -> String {
+-    // with MSAA, the prepass of the multisampled depth (inside g_shadows_depth too)
+-    let _ = write!(out, " g_depth_msaa={:.3}", p.gpu_depth[1] / gpu_n);
+-    // the ambient occlusion alone (inside g_effects)
+-    let _ = write!(out, " g_ssao={:.3}", p.gpu_ssao / gpu_n);
+-    // the contact shadows alone (inside g_effects)
+-    let _ = write!(out, " g_contact={:.3}", p.gpu_contact / gpu_n);
+-    // the bloom levels alone (inside g_post)
+-    let _ = write!(out, " g_bloom={:.3}", p.gpu_bloom / gpu_n);
+@@ -1073,5 +1104,3 @@ mod tests {
+-        assert!(l.contains(" r_finish=0.00 ") && l.contains(" g_objects=0.000 "), "{l}");
+-        assert!(
+-            l.contains(" g_depth=0.000 g_depth_msaa=0.000 g_ssao=0.000 g_contact=0.000 g_bloom=0.000 | shadow_path="),
+-            "{l}"
+-        );
++        assert!(l.contains(" r_finish=0.00 "), "{l}");
++        assert!(l.contains(" | gpu=unavailable gpu_parts=unavailable | shadow_path="), "{l}");
++        assert!(!l.contains(" g_objects="), "{l}");
+@@ -1087,0 +1117,25 @@ mod tests {
++    #[test]
++    fn summary_reports_total_gpu_time_without_element_timestamps() {
++        let mut p = FrameProfile::new(true);
++        let t = Instant::now();
++        let render = RenderStats {
++            gpu_ms: Some(4.25),
++            gpu_scene_a_ms: Some(2.50),
++            gpu_sample_serial: 42,
++            ..Default::default()
++        };
++        let mut line = None;
++        for i in 0..=50u64 {
++            p.lap_at(Lap::Sync, t + ms(i * 20));
++            line = p
++                .end_frame_at(&render, &SceneCounts::default(), &Parts::default(), t + ms(i * 20))
++                .or(line);
++        }
++        let line = line.expect("one profiling period");
++        assert!(
++            line.contains(" | gpu=4.25 gpu_sample=42 gpu_parts=unavailable gpu_scene_a=2.50 | shadow_path="),
++            "{line}"
++        );
++        assert!(!line.contains(" g_objects="), "{line}");
++    }
++
+diff --git a/crates/aurora-viewer/src/ui/monitor/overview.rs b/crates/aurora-viewer/src/ui/monitor/overview.rs
+index 1ff5de8c8cf03cfcdb84ac8c3b66571c69b84e47..752607ef786fb8e1cbfb2616c6b954a70b573932 100644
+--- a/crates/aurora-viewer/src/ui/monitor/overview.rs
++++ b/crates/aurora-viewer/src/ui/monitor/overview.rs
+@@ -163 +163 @@ fn tiles(p: &Palette, m: &Monitor, s: &Snapshot) -> Vec<Tile> {
+-    let gpu = s.parts.gpu.map(|g| g.iter().sum::<f32>());
++    let gpu = s.parts.gpu_total_ms;
+@@ -172 +172 @@ fn tiles(p: &Palette, m: &Monitor, s: &Snapshot) -> Vec<Tile> {
+-        sub: if gpu.is_some() {
++        sub: if s.parts.gpu.is_some() {
+@@ -372 +372 @@ fn frame_card(ui: &mut egui::Ui, p: &Palette, s: &Snapshot) {
+-        let gpu_total = s.parts.gpu.map(|g| g.iter().sum::<f32>());
++        let gpu_total = s.parts.gpu_total_ms;
+@@ -424,0 +425,3 @@ fn frame_card(ui: &mut egui::Ui, p: &Palette, s: &Snapshot) {
++                if let Some(total) = gpu_total {
++                    draw::text(ui, &fmt::ms(f64::from(total)), draw::BODY, p.ink);
++                }
+diff --git a/crates/aurora-viewer/src/ui/monitor/snapshot.rs b/crates/aurora-viewer/src/ui/monitor/snapshot.rs
+index 9b84f75947bc1ab52d3724ea549b100d83c03f63..5a63a83ec4aeee11983369e137bd19f001aa085d 100644
+--- a/crates/aurora-viewer/src/ui/monitor/snapshot.rs
++++ b/crates/aurora-viewer/src/ui/monitor/snapshot.rs
+@@ -20,0 +21 @@ pub struct FrameParts {
++    pub gpu_total_ms: Option<f32>,
+@@ -276 +277 @@ impl Point {
+-            gpu_ms: s.parts.gpu.map(|g| g.iter().sum()),
++            gpu_ms: s.parts.gpu_total_ms,
+diff --git a/docs/MACOS_PORT_PLAN.md b/docs/MACOS_PORT_PLAN.md
+index de321a9b8d3167c6dd82cb07dc8f2fdbb6c1e105..7854be713dab6f78f206d8ad43ff0bc41d8a7914 100644
+--- a/docs/MACOS_PORT_PLAN.md
++++ b/docs/MACOS_PORT_PLAN.md
+@@ -3 +3,18 @@
+-Status: proposal, 28 October 2026. Based on `origin/main` at `b6fbd94c`. The first Metal bring-up is in progress in this task worktree. The macOS workspace check and dev build succeeded, and the offline demo initialized Metal and produced an inspected screenshot after fixing hidden-window startup. Broader visual comparison and validation remain open. No grid test or release validation has been performed.
++Status: updated 29 October 2026. Initial Metal support is merged into the fork; macOS performance investigation and repair are in progress. The human confirmed texture display and object media playback in the real viewer. Broader visual parity, the real-scene performance target and release validation remain open.
++
++## Performance repair objective (29 October 2026)
++
++The human reports about 10 FPS on the Mac and 120–240 FPS in the Windows viewer at the same location. **30–60 FPS in an offline demo is not acceptance.** The goal is to identify and fix the causes of the Mac regression and reach at least 120 FPS, aiming for the reported 120–240 FPS range, in the human's real scene under comparable camera, physical render resolution, graphics settings, loading state and workload. Record hardware and display differences; if a hardware or presentation constraint prevents this, measure and explain it rather than declaring success. Only the human logs in or tests on the grid.
++
++The offline 600-object Metal demo on Apple M2 Pro at 2000×1124 physical pixels produced a median 60 FPS in both development and optimized release builds, 12 loaded one-second samples each. At 2560×1440 the development build produced 30 FPS (44 samples), with 2,136 reported draws in both; the median surface-acquire wait was 16.38 / 31.79 ms. At 2000×1124 the opt-in fixed-count GPU experiment produced 30.05 FPS (24 samples) and increased median CPU `r_finish` from 0.52 to 5.54 ms. A 60 Hz display and observed pacing limit these comparisons; GPU duration was not available in the per-element report. These observations identify bottleneck candidates, not the cause of the real scene's 10 FPS. The earlier attribution of the 30 FPS measurements to the application's background cap was unsupported: timed profiling bypasses that cap.
++
++A follow-up with total GPU timestamps exposed used the same 600-object demo, dev profile, FXAA, no shadows, Immediate presentation and 60 Hz display. After loading, the 2000×1124 run had 16 one-second samples: median 60.0 FPS, 15.84 ms GPU interval, 15.26 ms acquisition wait and 0.52 ms `r_finish`. At 2560×1440, 18 samples gave 30.0 FPS, 24.15 ms GPU interval, 28.94 ms acquisition and 1.53 ms `r_finish`; both recorded 2,136 draws. The GPU interval spans first to last timed pass and can include scheduling gaps or other GPU activity, so it is not a utilization measurement. It rises with resolution in this demo, but the individual pass costs and the user's real-scene cause remain unknown. Logs and captures are retained in the task worktree's ignored `.scratch/` directory.
++
++An initial pass-boundary experiment at 2000×1124 recorded a median 16.81 ms in the opaque scene pass and 20.21 ms for the first-to-last GPU interval (24 samples), while FPS fell to 30.0. This measurement used extra timestamps and is not directly comparable to the earlier 60 FPS run; timing overhead and run-to-run changes have not been isolated. The extra scene-pass timestamps are now opt-in for a controlled comparison.
++
++The first GPU timing runs above cannot establish a GPU bottleneck: later experiments revealed that the reported GPU values can remain identical for many seconds, indicating stale readbacks. The apparent medians are retained as observations, not valid per-frame statistics. A further 2000×1124 comparison with scene-pass timing off and on recorded a median 60 FPS in each run (15 one-second samples each), but the GPU values in the second run froze at 15.53 ms total and 11.61 ms for the scene pass. GPU sample freshness and readback failures must be diagnosed before using these numbers to guide a performance fix.
++
++1. Make valid Metal profiling available: distinguish unavailable GPU measurements from zero, measure total GPU time and surface-acquire / presentation waits, actual physical resolution, draw counts, CPU and frame-time distribution without blocking each frame. Establish stable foreground and release-mode baselines, recording display refresh and present mode.
++2. Reproduce performance bottlenecks in offline representative scenes and isolate output resolution, GPU workload, CPU draw submission, asset streaming and presentation pacing through controlled comparisons. Compare the same scenes and build profile on Windows when hardware is available. Keep observed results, hypotheses and unavailable measurements separate.
++3. Implement and measure targeted fixes. In particular, investigate Metal's individual indirect draw calls and GPU-driven alternatives; do not enable the current fixed-count experiment unless its measured cost and visual behaviour justify it. Preserve graphics fidelity and do not introduce per-frame GPU waits.
++4. Run the relevant automated checks and before/after demo scenarios, then provide a build to the human for the real scene. Completion requires the human's confirmation of the FPS target, with settings and measurement conditions recorded. Keep this task open if only a demo improves or real-world FPS is not measured.
+@@ -62 +79 @@ For the reported media failures, macOS plugin path discovery recognizes a local
+-An opt-in fixed-count Metal GPU culling experiment (`AURORA_METAL_GPU_CULL=1`) clears indirect argument slots before the compute pass and submits the current face-count upper bound; the wgpu Metal backend expands those into individual indirect draws. The existing Metal GPU test matched its CPU reference and, with argument buffers deliberately prefilled, verified unused slots were cleared. Filtered GPU-culling tests passed. CPU and experimental 600-object offline demos were then run sequentially with the same window size and the human keeping them visible. After loading, 16 / 15 one-second samples gave median frame times of 32.32 / 33.34 ms and render-thread frame times of 34.84 / 34.88 ms (CPU / experiment), with both near the 30 fps background cap. Both frame-900 screenshots were inspected; both runs exhausted texture pages and reported rejected uploads. These capped runs show no clear speedup and do not establish full visual parity or uncapped performance; repeat after resolving the texture limit with representative scenes. The renderer previously reported 79 texture pages on this Metal device because `open_device` applied the individual-texture limit to binding-array elements. Metal now uses the separate binding-array element limit, capped at 2,048 pages. A 600-object offline streaming demo loaded 600 textures at full resolution with 91 pages and no page-exhaustion warnings; frame 900 was captured and inspected. A filtered unit test covers the platform-specific limit. The human confirmed texture display in the normal viewer on 28 October 2026; broader visual parity remains unverified. The CPU path remains the default until regression and performance checks justify a change.
++An opt-in fixed-count Metal GPU culling experiment (`AURORA_METAL_GPU_CULL=1`) clears indirect argument slots before the compute pass and submits the current face-count upper bound; the wgpu Metal backend expands those into individual indirect draws. The existing Metal GPU test matched its CPU reference and, with argument buffers deliberately prefilled, verified unused slots were cleared. Filtered GPU-culling tests passed. CPU and experimental 600-object offline demos were then run sequentially with the same window size and the human keeping them visible. After loading, 16 / 15 one-second samples gave median frame times of 32.32 / 33.34 ms and render-thread frame times of 34.84 / 34.88 ms (CPU / experiment), with both near 30 FPS while surface acquisition waited; the cause of this pacing was not established. Both frame-900 screenshots were inspected; both runs exhausted texture pages and reported rejected uploads. These capped runs show no clear speedup and do not establish full visual parity or uncapped performance; repeat after resolving the texture limit with representative scenes. The renderer previously reported 79 texture pages on this Metal device because `open_device` applied the individual-texture limit to binding-array elements. Metal now uses the separate binding-array element limit, capped at 2,048 pages. A 600-object offline streaming demo loaded 600 textures at full resolution with 91 pages and no page-exhaustion warnings; frame 900 was captured and inspected. A filtered unit test covers the platform-specific limit. The human confirmed texture display in the normal viewer on 28 October 2026; broader visual parity remains unverified. The CPU path remains the default until regression and performance checks justify a change.
+diff --git a/docs/TESTING.md b/docs/TESTING.md
+index 802502b0b897afcbd0e28ca8f2c9af8e4e0fb6a3..6a488e99356d1147bc7ef2ef304d5fda9806c265 100644
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -7641,0 +7642 @@ What the inventory must show with these scenarios:
++| `AURORA_PROFILE_SCENE_A=1` | Adds scene pass GPU timestamps where detailed timestamps are unavailable |
+@@ -8638,0 +8640,12 @@ thread.
++- `gpu` is the average elapsed GPU timestamp between the first and last
++  timed passes, in ms. `gpu=unavailable` means no valid timestamp was
++  collected; it does not mean zero GPU work. `gpu_parts=unavailable` means
++  per-element timestamps are unsupported or not yet available, so `g_*`
++  fields are omitted. GPU timestamps and surface acquisition waits measure
++  different things; neither alone identifies a presentation bottleneck.
++  `gpu_sample` identifies the latest valid GPU readback; repeated identifiers
++  mean repeated observations of one sample. Samples older than two seconds are
++  unavailable, not new measurements.
++  With `AURORA_PROFILE_SCENE_A=1` as well, on adapters lacking per-draw
++  timestamps, `gpu_scene_a` reports the opaque scene pass interval. These
++  extra timestamps may affect performance; compare with the option off.

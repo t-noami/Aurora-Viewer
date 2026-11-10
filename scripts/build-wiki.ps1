@@ -42,6 +42,7 @@ $pages = @(
     @{ Section = 'Contributing'; Page = 'Branding'; Title = 'Branding and interface'; Source = 'docs/BRANDING.md' }
     @{ Section = 'Technical'; Page = 'Architecture'; Title = 'Architecture'; Source = 'ARCHITECTURE.md' }
     @{ Section = 'Technical'; Page = 'RLVa'; Title = 'RLVa implementation status'; Source = 'docs/RLVA.md' }
+    @{ Section = 'Technical'; Page = 'Metal-investigation-handoff'; Title = 'Metal investigation handoff'; Source = 'docs/METAL_INVESTIGATION_HANDOFF.md' }
     @{ Section = 'Technical'; Page = 'macOS-port-plan'; Title = 'macOS port plan'; Source = 'docs/MACOS_PORT_PLAN.md' }
     @{ Section = 'Technical'; Page = 'Licences'; Title = 'Licences and notices'; Source = 'NOTICE.md' }
 )

@@ -1,0 +1,32 @@
+# Metal performance investigation handoff
+
+As of 10 November 2026, the cause of the reported 4K slowdown remains open. The user reported about 10 FPS on macOS and higher frame rates on Windows. The investigations did not establish comparable camera, settings, physical render resolution or workload across those machines. Real-scene acceptance at 120 FPS is pending.
+
+## What the October work established
+
+- On the fork, PR #1 brought up the Metal renderer and local media packaging. The human confirmed texture display and object media playback on 28 October. The earlier comparison near 30 FPS did not establish that a background cap caused it. The archived investigation records draw counts, resolutions and the limitations of its one-second summaries. [Fork FPS investigation](archive/metal-2026-10/notes/macos-fps-investigation.md)
+- An attempt to inspect the official v0.8.3 demo opened a separate normal viewer and displayed its login screen. The demo-success claim and **65.2 FPS** from that session were withdrawn. Process output could not identify the window the user saw. Grid access or credential transmission was not established. For subsequent offline testing, use the supported demo command, confirm the owned process and its demo marker, and inspect its own capture. [Incident and prevention](archive/metal-2026-10/plans/OFFLINE_DEMO_LAUNCH_SAFETY.md)
+- The fork's timestamp prototypes found repeated, reversed and missing samples. The later prototype tags readbacks by frame, counts them once, expires stale values and selects the final measured pass. Positive timestamp pairs can still mix writes from different frames. The recorded 15.84 and 24.15 ms medians cannot identify the bottleneck. The test source contains the render and compute reproducers. [Findings](archive/metal-2026-10/notes/findings.md) · [Diagnostic source](archive/metal-2026-10/tests/metal_timestamp_repro.rs)
+- A separate v0.8.3 repair raised the texture-page limit on Metal. The handoff records three before runs with 55, 83 and 125 refused uploads at 79 pages. After the change, three runs reached 90–91 pages with zero refusals. Both sides ran near 59–60 FPS, with different texture completeness. The original repair was paused during checks. Broader visual parity and matched real-scene performance remain unverified. The fork already contains the equivalent page-limit calculation and unit test. [Paused repair handoff](archive/metal-2026-10/notes/PAUSED_HANDOFF.md)
+- The independent review reanalysed existing summaries. The 2000×1124 standard and streaming scenes were near 60 FPS with most frame time spent waiting for a drawable. The wait could include presentation pacing or GPU backlog. Thirteen grouped API calls can issue many native Metal draws. Hardware GPU timing, native ICB benefits and the cause of the 4K report remain unmeasured. [Independent review](archive/metal-2026-10/notes/METAL_INDEPENDENT_REVIEW_20261031.md)
+
+These notes are dated records. Their local log and capture names identify historical evidence. This archival integration involved Git inspection only. It made no new measurements.
+
+## Source inventory and recovery
+
+The main checkout was clean at `b6fbd94c`. The clean `macos-metal` checkout at `397f0e63` had the same tree as fork PR #1 at `b8fee438`. Its original commits, including the packaging script and CI changes, are retained in the fork history. The six other checkouts had the following independent changes. Each patch contains **all tracked changes** against the named base. Copy each listed **new file** to its original repository path after applying that patch.
+
+| Worktree | Base | Tracked changes | New files to restore |
+|---|---|---|---|
+| macos-port-plan | b6fbd94c | [Task and wiki entries](archive/metal-2026-10/patches/macos-port-plan.patch) | [Initial port plan](archive/metal-2026-10/plans/initial/MACOS_PORT_PLAN.md) → `docs/MACOS_PORT_PLAN.md` |
+| macos-fps | b8fee438 | [Renderer, profiler, monitor UI, tests, testing guide and revised port plan](archive/metal-2026-10/patches/macos-fps.patch) | None |
+| metal-performance-repair | b8fee438 | [Timestamp/readback implementation, profiler tests, architecture and testing notes](archive/metal-2026-10/patches/metal-performance-repair.patch) | [Earlier repair plan](archive/metal-2026-10/plans/fork-repair-plan.md) → `docs/METAL_PERFORMANCE_REPAIR_PLAN.md`; [diagnostic](archive/metal-2026-10/tests/metal_timestamp_repro.rs) → `crates/aurora-render/tests/metal_timestamp_repro.rs` |
+| metal-repair-plan | b8fee438 | [Task and wiki entries](archive/metal-2026-10/patches/metal-repair-plan.patch) | Revised plan and safety guide below |
+| upstream-macos-v083 | 7030025c | [Independent task and wiki entries](archive/metal-2026-10/patches/upstream-macos-v083.patch) | Revised plan and safety guide below |
+| metal-v083-repair | 7030025c | [Texture-page fix, unit test, task and wiki entries](archive/metal-2026-10/patches/metal-v083-repair.patch) | Revised plan and safety guide below |
+
+The three checkouts in the last rows share byte-identical copies of the [revised repair plan](archive/metal-2026-10/plans/METAL_PERFORMANCE_REPAIR_PLAN.md) and [offline safety guide](archive/metal-2026-10/plans/OFFLINE_DEMO_LAUNCH_SAFETY.md). Restore both under `docs/` with those filenames. The [fork port plan](archive/metal-2026-10/plans/MACOS_PORT_PLAN.md) is the version from the merged bring-up.
+
+Use a clean checkout of the exact base and apply **one** worktree patch with `git apply --unidiff-zero /path/to/worktree.patch`. The worktree patches use zero lines of context and are independent alternatives. The official base is commit `7030025c2678c9b428aac1b53d385b752c326a55` from the [official v0.8.3 tag](https://github.com/Aurora-Viewer/Aurora-Viewer/releases/tag/v0.8.3). The FPS monitor prototype and later timing repair remain available for inspection or selective porting. Neither supplies a validated Metal GPU duration.
+
+The scratch renderer candidate matched the v0.8.3 repair source byte for byte. The [bring-up logging patch](archive/metal-2026-10/patches/gpu-main-thread.patch) is also preserved; its result is the renderer blob in `02064fca`. The PR description and review drafts concerned the already merged [fork PR #1](https://github.com/t-noami/Aurora-Viewer/pull/1). This archive omits raw logs, captures, traces, app and media bundles, the generated embedded-video fixture, dependencies, build products, viewer settings and caches.

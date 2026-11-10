@@ -1,0 +1,54 @@
+diff --git a/TASKS.md b/TASKS.md
+index 1c0e78af5533022f179f5a57f17154174d6361c7..a3e0933016cf01cff861244d8872840fa6b72d22 100644
+--- a/TASKS.md
++++ b/TASKS.md
+@@ -1198,0 +1199 @@ What comes before the rest (requested by the human).
++  - 🔧 Metal performance repair (2026-10-30, official v0.8.3): on Metal use the binding-array limit for texture pages, not the separate individual-texture limit. In the 600-object offline demo, three original runs hit 79 pages and refused 55 / 83 / 125 uploads; three modified runs reached 90–91 pages without refused uploads. Each measured interval exceeded 60 seconds after warm-up; both versions stayed near 59–60 FPS on a 60 Hz display, with incomplete textures in the original runs, so this is not a verified speedup or a matched-quality performance comparison. GPU timing validation, broader visual checks, performance optimization and the human real-scene target of at least 120 FPS remain open; see `docs/METAL_PERFORMANCE_REPAIR_PLAN.md`.
+diff --git a/crates/aurora-render/src/main_thread.rs b/crates/aurora-render/src/main_thread.rs
+index fc0357a6478b8c4d82d29c23e424fe613aa064c3..3d5431ae4da5019dd9941feb3716bbdf6cdebcd4 100644
+--- a/crates/aurora-render/src/main_thread.rs
++++ b/crates/aurora-render/src/main_thread.rs
+@@ -1382,4 +1382 @@ fn open_device(adapter: &wgpu::Adapter) -> Result<OpenedDevice, RenderError> {
+-    let max_textures = alim
+-        .max_binding_array_elements_per_shader_stage
+-        .min(alim.max_sampled_textures_per_shader_stage.saturating_sub(17))
+-        .clamp(64, 16384);
++    let max_textures = texture_page_limit(adapter.get_info().backend, &alim);
+@@ -1405,0 +1403,13 @@ fn open_device(adapter: &wgpu::Adapter) -> Result<OpenedDevice, RenderError> {
++/// Metal counts binding array elements separately from individual texture bindings.
++/// Bound the table while keeping the other backends' existing limit.
++fn texture_page_limit(backend: wgpu::Backend, limits: &wgpu::Limits) -> u32 {
++    let arrays = limits.max_binding_array_elements_per_shader_stage;
++    if backend == wgpu::Backend::Metal {
++        arrays.clamp(64, 2048)
++    } else {
++        arrays
++            .min(limits.max_sampled_textures_per_shader_stage.saturating_sub(17))
++            .clamp(64, 16384)
++    }
++}
++
+@@ -1441,0 +1452,16 @@ mod tests {
++    #[test]
++    fn metal_texture_pages_use_the_binding_array_limit() {
++        let limits = wgpu::Limits {
++            max_binding_array_elements_per_shader_stage: 1_000_000,
++            max_sampled_textures_per_shader_stage: 96,
++            ..Default::default()
++        };
++        assert_eq!(texture_page_limit(wgpu::Backend::Metal, &limits), 2048);
++        assert_eq!(texture_page_limit(wgpu::Backend::Vulkan, &limits), 79);
++        let small = wgpu::Limits {
++            max_binding_array_elements_per_shader_stage: 128,
++            ..limits
++        };
++        assert_eq!(texture_page_limit(wgpu::Backend::Metal, &small), 128);
++    }
++
+diff --git a/scripts/build-wiki.ps1 b/scripts/build-wiki.ps1
+index 0359b03e38d89fd1b9919a7035bd8bb72221dcf6..3402fcd915fcfad1edf46a704e1198c2e2bebd9e 100644
+--- a/scripts/build-wiki.ps1
++++ b/scripts/build-wiki.ps1
+@@ -43,0 +44,2 @@ $pages = @(
++    @{ Section = 'Technical'; Page = 'Metal-performance-plan'; Title = 'Metal performance repair'; Source = 'docs/METAL_PERFORMANCE_REPAIR_PLAN.md' }
++    @{ Section = 'Technical'; Page = 'Offline-demo-safety'; Title = 'Offline demo launch safety'; Source = 'docs/OFFLINE_DEMO_LAUNCH_SAFETY.md' }

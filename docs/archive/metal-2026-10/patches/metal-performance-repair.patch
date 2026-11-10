@@ -1,0 +1,338 @@
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index c6363a142834be22e0bad091805feeafe80150c3..553945ebe7bd74d59d8d3e486ab19e8ec905bba3 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -1927,0 +1928 @@ Scripts use a shared editor (`ui/scripts.rs`, actions in `app/scripts.rs`) for i
++| `aurora-render/tests/metal_timestamp_repro.rs` | Ignored GPU diagnostics compare timestamp samples in render and compute passes, single or split encoders, serial or parallel finishing, and shared or fresh query sets; per-iteration waits belong to the diagnostic only. |
+diff --git a/TASKS.md b/TASKS.md
+index 1b68c3087f367f2c0e5682aaebd8e7b64fb81bc5..778d240a4976f26265c42a702733b64e0084d654 100644
+--- a/TASKS.md
++++ b/TASKS.md
+@@ -1072,0 +1073 @@ What comes before the rest (requested by the human).
++- 🔧 Metal performance repair (human request, 2026-10-30): associate GPU readbacks with frame IDs, avoid duplicate aggregation and stale display values, release failed map slots, and select the ending pass from the HUD and selection passes actually drawn. A minimal Metal test reproduces missing, reversed and non-progressing timestamps even in a single pass and without frames in flight; positive pairs are not yet independently validated. The GPU timing repair, matched CPU/GPU/presentation baseline, targeted performance fixes and real-scene human validation remain open. The target is at least 120 FPS; see `docs/METAL_PERFORMANCE_REPAIR_PLAN.md`.
+diff --git a/crates/aurora-render/src/main_thread.rs b/crates/aurora-render/src/main_thread.rs
+index 32ab0597cf729fd2a93048f112fee570cc5ff5f7..5de1470c24f19522b57c9602a1d43985ffec8391 100644
+--- a/crates/aurora-render/src/main_thread.rs
++++ b/crates/aurora-render/src/main_thread.rs
+@@ -1045,0 +1046 @@ impl Renderer {
++            let gpu_sample_at = self.last_stats.gpu_sample_at.filter(|at| at.elapsed() < Duration::from_secs(2));
+@@ -1047,2 +1048,4 @@ impl Renderer {
+-                gpu_ms: self.last_stats.gpu_ms,
+-                gpu_elements: self.last_stats.gpu_elements,
++                gpu_ms: gpu_sample_at.and(self.last_stats.gpu_ms),
++                gpu_sample_frame: gpu_sample_at.and(self.last_stats.gpu_sample_frame),
++                gpu_sample_at,
++                gpu_elements: gpu_sample_at.and(self.last_stats.gpu_elements),
+@@ -1050 +1053 @@ impl Renderer {
+-                    gpu_ms: self.last_stats.shadow.gpu_ms,
++                    gpu_ms: gpu_sample_at.and(self.last_stats.shadow.gpu_ms),
+@@ -1053,4 +1056,4 @@ impl Renderer {
+-                gpu_depth: self.last_stats.gpu_depth,
+-                gpu_ssao: self.last_stats.gpu_ssao,
+-                gpu_contact: self.last_stats.gpu_contact,
+-                gpu_bloom: self.last_stats.gpu_bloom,
++                gpu_depth: gpu_sample_at.and(self.last_stats.gpu_depth),
++                gpu_ssao: gpu_sample_at.and(self.last_stats.gpu_ssao),
++                gpu_contact: gpu_sample_at.and(self.last_stats.gpu_contact),
++                gpu_bloom: gpu_sample_at.and(self.last_stats.gpu_bloom),
+diff --git a/crates/aurora-render/src/renderer.rs b/crates/aurora-render/src/renderer.rs
+index 4b4f81767562474073b55373495da5cca6bab8d5..b264ada34661a8bc3ca3cc6a3e0f2dfa82620bcd 100644
+--- a/crates/aurora-render/src/renderer.rs
++++ b/crates/aurora-render/src/renderer.rs
+@@ -37,2 +37,2 @@ use std::sync::Arc;
+-use std::sync::atomic::{AtomicBool, Ordering};
+-use std::time::Instant;
++use std::sync::atomic::{AtomicU8, Ordering};
++use std::time::{Duration, Instant};
+@@ -850 +850,7 @@ struct GpuTimer {
+-    readback: Vec<(wgpu::Buffer, Arc<AtomicBool>, bool)>,
++    readback: Vec<(wgpu::Buffer, Arc<AtomicU8>, bool)>,
++    slot_frame: [u64; 3],
++    processed_frame: Option<u64>,
++    last_frame: Option<u64>,
++    last_sample_at: Option<Instant>,
++    invalid_samples: u64,
++    last_timestamps: (u64, u64),
+@@ -1049 +1055 @@ impl GpuTimer {
+-                    Arc::new(AtomicBool::new(false)),
++                    Arc::new(AtomicU8::new(0)),
+@@ -1057,0 +1064,6 @@ impl GpuTimer {
++            slot_frame: [0; 3],
++            processed_frame: None,
++            last_frame: None,
++            last_sample_at: None,
++            invalid_samples: 0,
++            last_timestamps: (0, 0),
+@@ -1078,2 +1090,20 @@ impl GpuTimer {
+-            if *pending && ready.load(Ordering::Acquire) {
+-                if let Ok(view) = buf.get_mapped_range(..) {
++            let status = ready.load(Ordering::Acquire);
++            if *pending && status != 0 {
++                let frame = self.slot_frame[slot];
++                let newest = self.processed_frame.is_none_or(|previous| frame > previous);
++                if newest {
++                    self.processed_frame = Some(frame);
++                    self.last_frame = None;
++                    self.last_sample_at = None;
++                    self.last_ms = None;
++                    self.last_elements = None;
++                    self.last_shadow_parts = None;
++                    self.last_depth = None;
++                    self.last_ssao = None;
++                    self.last_contact = None;
++                    self.last_bloom = None;
++                }
++                if status == 1
++                    && newest
++                    && let Ok(view) = buf.get_mapped_range(..)
++                {
+@@ -1085 +1115,9 @@ impl GpuTimer {
+-                    if ts[1] > ts[0] {
++                    let finite = ts[0] != u64::MAX && ts[1] != u64::MAX;
++                    let progressing = ts[0] > self.last_timestamps.0 && ts[1] > self.last_timestamps.1;
++                    if finite {
++                        self.last_timestamps.0 = self.last_timestamps.0.max(ts[0]);
++                        self.last_timestamps.1 = self.last_timestamps.1.max(ts[1]);
++                    }
++                    if finite && progressing && ts[0] != 0 && ts[1] > ts[0] {
++                        self.last_frame = Some(frame);
++                        self.last_sample_at = Some(Instant::now());
+@@ -1106,0 +1145,10 @@ impl GpuTimer {
++                    } else {
++                        self.invalid_samples += 1;
++                        if profile() && (self.invalid_samples == 1 || self.invalid_samples.is_multiple_of(120)) {
++                            log::info!(
++                                "GPU timer: invalid frame={frame} begin={} end={} count={}",
++                                ts[0],
++                                ts[1],
++                                self.invalid_samples
++                            );
++                        }
+@@ -1109 +1157,3 @@ impl GpuTimer {
+-                buf.unmap();
++                if status == 1 {
++                    buf.unmap();
++                }
+@@ -1111 +1161 @@ impl GpuTimer {
+-                ready.store(false, Ordering::Release);
++                ready.store(0, Ordering::Release);
+@@ -1322,0 +1373,20 @@ impl Marks {
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum TimerEnd {
++    Post,
++    WorldSelection,
++    Hud,
++    HudSelection,
++}
++
++fn timer_end_point(hud: bool, world_selection: bool, hud_selection: bool) -> TimerEnd {
++    if hud_selection {
++        TimerEnd::HudSelection
++    } else if hud {
++        TimerEnd::Hud
++    } else if world_selection {
++        TimerEnd::WorldSelection
++    } else {
++        TimerEnd::Post
++    }
++}
++
+@@ -7052,0 +7123,3 @@ impl Backend {
++        let draw_world_selection = rg.select_faces.1 > 0 && self.selection.is_some();
++        let draw_hud_selection = hud_select_faces_range.1 > 0 && self.hud_selection.is_some() && self.hud_depth.is_some();
++        let timer_end = timer_end_point(draw_huds, draw_world_selection, draw_hud_selection);
+@@ -7084 +7157 @@ impl Backend {
+-                (Some(t), Some(_)) if !draw_huds && rg.select_faces.1 == 0 => Some(wgpu::RenderPassTimestampWrites {
++                (Some(t), Some(_)) if timer_end == TimerEnd::Post => Some(wgpu::RenderPassTimestampWrites {
+@@ -7139 +7212 @@ impl Backend {
+-                (Some(t), Some(_)) if !draw_huds => Some(wgpu::RenderPassTimestampWrites {
++                (Some(t), Some(_)) if timer_end == TimerEnd::WorldSelection => Some(wgpu::RenderPassTimestampWrites {
+@@ -7328 +7401 @@ impl Backend {
+-                    (Some(t), Some(_)) if hud_select_faces_range.1 == 0 => Some(wgpu::RenderPassTimestampWrites {
++                    (Some(t), Some(_)) if timer_end == TimerEnd::Hud => Some(wgpu::RenderPassTimestampWrites {
+@@ -7443,0 +7517 @@ impl Backend {
++            t.slot_frame[slot] = index;
+@@ -7445,3 +7519,8 @@ impl Backend {
+-                if r.is_ok() {
+-                    ready.store(true, Ordering::Release);
+-                }
++                let status = match r {
++                    Ok(()) => 1,
++                    Err(error) => {
++                        log::warn!("GPU timer readback failed: {error}");
++                        2
++                    }
++                };
++                ready.store(status, Ordering::Release);
+@@ -7489,7 +7568,14 @@ impl Backend {
+-        stats.gpu_ms = self.timer.as_ref().and_then(|t| t.last_ms);
+-        stats.gpu_elements = self.timer.as_ref().and_then(|t| t.last_elements);
+-        stats.shadow.gpu_ms = self.timer.as_ref().and_then(|t| t.last_shadow_parts);
+-        stats.gpu_depth = self.timer.as_ref().and_then(|t| t.last_depth);
+-        stats.gpu_ssao = self.timer.as_ref().and_then(|t| t.last_ssao);
+-        stats.gpu_contact = self.timer.as_ref().and_then(|t| t.last_contact);
+-        stats.gpu_bloom = self.timer.as_ref().and_then(|t| t.last_bloom);
++        // A missing or invalid new readback must not leave an old value on screen.
++        let timer = self
++            .timer
++            .as_ref()
++            .filter(|t| t.last_sample_at.is_some_and(|at| at.elapsed() < Duration::from_secs(2)));
++        stats.gpu_sample_frame = timer.and_then(|t| t.last_frame);
++        stats.gpu_sample_at = timer.and_then(|t| t.last_sample_at);
++        stats.gpu_ms = timer.and_then(|t| t.last_ms);
++        stats.gpu_elements = timer.and_then(|t| t.last_elements);
++        stats.shadow.gpu_ms = timer.and_then(|t| t.last_shadow_parts);
++        stats.gpu_depth = timer.and_then(|t| t.last_depth);
++        stats.gpu_ssao = timer.and_then(|t| t.last_ssao);
++        stats.gpu_contact = timer.and_then(|t| t.last_contact);
++        stats.gpu_bloom = timer.and_then(|t| t.last_bloom);
+@@ -7791,0 +7878,13 @@ mod tests {
++    #[test]
++    fn timer_endpoint_uses_the_last_pass_that_is_actually_drawn() {
++        assert_eq!(timer_end_point(false, false, false), TimerEnd::Post);
++        assert_eq!(timer_end_point(false, true, false), TimerEnd::WorldSelection);
++        assert_eq!(timer_end_point(true, false, false), TimerEnd::Hud);
++        assert_eq!(timer_end_point(true, true, false), TimerEnd::Hud);
++        for hud in [false, true] {
++            for world in [false, true] {
++                assert_eq!(timer_end_point(hud, world, true), TimerEnd::HudSelection);
++            }
++        }
++    }
++
+diff --git a/crates/aurora-render/src/types.rs b/crates/aurora-render/src/types.rs
+index c842ed6cdb0b41a08c3d7bcd9c949a4d32e7048d..d4e2556b8f654b9d61db534d6b467b25bf1ce37d 100644
+--- a/crates/aurora-render/src/types.rs
++++ b/crates/aurora-render/src/types.rs
+@@ -1340,0 +1341,4 @@ pub struct RenderStats {
++    /// Frame associated with the GPU readback, shared by all GPU timings.
++    pub gpu_sample_frame: Option<u64>,
++    /// When the readback completed, used to expire stale display values.
++    pub gpu_sample_at: Option<std::time::Instant>,
+diff --git a/crates/aurora-viewer/src/frame_profile.rs b/crates/aurora-viewer/src/frame_profile.rs
+index 0b041b5c984c8754b22fe214868dd04edf6e5388..d77feb976ec62ed709455b0c957515cbd8051657 100644
+--- a/crates/aurora-viewer/src/frame_profile.rs
++++ b/crates/aurora-viewer/src/frame_profile.rs
+@@ -395,0 +396,2 @@ struct Period {
++    gpu_total: f32,
++    gpu_total_frames: u32,
+@@ -460,0 +463 @@ pub struct FrameProfile {
++    last_gpu_frame: Option<u64>,
+@@ -487,0 +491 @@ impl FrameProfile {
++            last_gpu_frame: None,
+@@ -516,0 +521 @@ impl FrameProfile {
++            self.last_gpu_frame = None;
+@@ -628,6 +633,19 @@ impl FrameProfile {
+-        if let Some(g) = render.gpu_elements {
+-            add(&mut p.gpu, &g);
+-            p.gpu_frames += 1;
+-        }
+-        if let Some(d) = render.gpu_depth {
+-            add(&mut p.gpu_depth, &d);
++        let new_gpu_sample = render
++            .gpu_sample_frame
++            .is_some_and(|frame| self.last_gpu_frame.is_none_or(|last| frame > last));
++        if new_gpu_sample {
++            self.last_gpu_frame = render.gpu_sample_frame;
++            if let Some(ms) = render.gpu_ms {
++                p.gpu_total += ms;
++                p.gpu_total_frames += 1;
++            }
++            if let Some(g) = render.gpu_elements {
++                add(&mut p.gpu, &g);
++                p.gpu_frames += 1;
++                if let Some(d) = render.gpu_depth {
++                    add(&mut p.gpu_depth, &d);
++                }
++                p.gpu_ssao += render.gpu_ssao.unwrap_or(0.0);
++                p.gpu_contact += render.gpu_contact.unwrap_or(0.0);
++                p.gpu_bloom += render.gpu_bloom.unwrap_or(0.0);
++            }
+@@ -635,3 +652,0 @@ impl FrameProfile {
+-        p.gpu_ssao += render.gpu_ssao.unwrap_or(0.0);
+-        p.gpu_contact += render.gpu_contact.unwrap_or(0.0);
+-        p.gpu_bloom += render.gpu_bloom.unwrap_or(0.0);
+@@ -648 +663 @@ impl FrameProfile {
+-        if let Some(g) = sh.gpu_ms {
++        if new_gpu_sample && let Some(g) = sh.gpu_ms {
+@@ -935,4 +950,9 @@ fn summary(p: &Period, elapsed: Duration) -> String {
+-    let gpu_n = p.gpu_frames.max(1) as f32;
+-    let _ = write!(out, " | gpu={:.2}", p.gpu.iter().sum::<f32>() / gpu_n);
+-    for (el, ms) in GpuElement::ALL.iter().zip(p.gpu) {
+-        let _ = write!(out, " g_{}={:.3}", el.key(), ms / gpu_n);
++    if p.gpu_total_frames > 0 {
++        let _ = write!(
++            out,
++            " | gpu={:.2} gpu_samples={}",
++            p.gpu_total / p.gpu_total_frames as f32,
++            p.gpu_total_frames
++        );
++    } else {
++        out.push_str(" | gpu=unavailable gpu_samples=0");
+@@ -940,5 +960,17 @@ fn summary(p: &Period, elapsed: Duration) -> String {
+-    // shadows and depth in detail: culling, cascades, prepass; then the
+-    // casters of each cascade
+-    let shadow_n = p.gpu_shadow_frames.max(1) as f32;
+-    for (key, ms) in ["cull", "shadow0", "shadow1", "shadow2", "depth"].iter().zip(p.gpu_shadow) {
+-        let _ = write!(out, " g_{key}={:.3}", ms / shadow_n);
++    if p.gpu_frames > 0 {
++        let gpu_n = p.gpu_frames as f32;
++        for (el, ms) in GpuElement::ALL.iter().zip(p.gpu) {
++            let _ = write!(out, " g_{}={:.3}", el.key(), ms / gpu_n);
++        }
++        let shadow_n = p.gpu_shadow_frames.max(1) as f32;
++        for (key, ms) in ["cull", "shadow0", "shadow1", "shadow2", "depth"].iter().zip(p.gpu_shadow) {
++            let _ = write!(out, " g_{key}={:.3}", ms / shadow_n);
++        }
++        let _ = write!(
++            out,
++            " g_depth_msaa={:.3} g_ssao={:.3} g_contact={:.3} g_bloom={:.3}",
++            p.gpu_depth[1] / gpu_n,
++            p.gpu_ssao / gpu_n,
++            p.gpu_contact / gpu_n,
++            p.gpu_bloom / gpu_n
++        );
+@@ -946,8 +977,0 @@ fn summary(p: &Period, elapsed: Duration) -> String {
+-    // with MSAA, the prepass of the multisampled depth (inside g_shadows_depth too)
+-    let _ = write!(out, " g_depth_msaa={:.3}", p.gpu_depth[1] / gpu_n);
+-    // the ambient occlusion alone (inside g_effects)
+-    let _ = write!(out, " g_ssao={:.3}", p.gpu_ssao / gpu_n);
+-    // the contact shadows alone (inside g_effects)
+-    let _ = write!(out, " g_contact={:.3}", p.gpu_contact / gpu_n);
+-    // the bloom levels alone (inside g_post)
+-    let _ = write!(out, " g_bloom={:.3}", p.gpu_bloom / gpu_n);
+@@ -1073,5 +1097,2 @@ mod tests {
+-        assert!(l.contains(" r_finish=0.00 ") && l.contains(" g_objects=0.000 "), "{l}");
+-        assert!(
+-            l.contains(" g_depth=0.000 g_depth_msaa=0.000 g_ssao=0.000 g_contact=0.000 g_bloom=0.000 | shadow_path="),
+-            "{l}"
+-        );
++        assert!(l.contains(" r_finish=0.00 "), "{l}");
++        assert!(l.contains(" | gpu=unavailable gpu_samples=0 | shadow_path="), "{l}");
+@@ -1087,0 +1109,20 @@ mod tests {
++    #[test]
++    fn repeated_gpu_readbacks_are_counted_once_across_periods() {
++        let mut profile = FrameProfile::new(true);
++        let t = Instant::now();
++        let render = RenderStats {
++            gpu_ms: Some(4.25),
++            gpu_sample_frame: Some(42),
++            ..Default::default()
++        };
++        let mut lines = Vec::new();
++        for i in 0..=110u64 {
++            profile.lap_at(Lap::Sync, t + ms(i * 20));
++            if let Some(line) = profile.end_frame_at(&render, &SceneCounts::default(), &Parts::default(), t + ms(i * 20)) {
++                lines.push(line);
++            }
++        }
++        assert!(lines[0].contains("gpu=4.25 gpu_samples=1"), "{}", lines[0]);
++        assert!(lines[1].contains("gpu=unavailable gpu_samples=0"), "{}", lines[1]);
++    }
++
+diff --git a/docs/TESTING.md b/docs/TESTING.md
+index 802502b0b897afcbd0e28ca8f2c9af8e4e0fb6a3..cee0434a1066e565e0d8a887a17e18a9a7a83ec8 100644
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -8540,0 +8541 @@ What the inventory must show with these scenarios:
++- **`AURORA_PROFILE=1`**: GPU `gpu` is the elapsed interval from the first timed pass to the selected post/HUD/selection endpoint; query resolution happens before egui and the interval excludes the later interface work. `gpu_samples` counts distinct completed readbacks in the period; `gpu=unavailable` means no valid sample, not zero GPU work. Invalid pairs are logged. The interval can include scheduling gaps, and timestamp validity still requires independent verification on Metal.

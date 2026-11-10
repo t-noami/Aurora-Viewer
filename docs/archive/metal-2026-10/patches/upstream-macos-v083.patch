@@ -1,0 +1,16 @@
+diff --git a/TASKS.md b/TASKS.md
+index 1c0e78af5533022f179f5a57f17154174d6361c7..7998d27b54f45a7d4352e9529b9ef1629179cf84 100644
+--- a/TASKS.md
++++ b/TASKS.md
+@@ -2967,0 +2968,4 @@ Open-source technologies that could set Aurora apart (human request of 2026-10-1
++
++## Local v0.8.3 Metal repair follow-up
++
++- 🔧 Rebase the repair effort on official v0.8.3 without overwriting prior work; enforce offline launch safety before execution, then measure and repair graphics/performance with unchanged quality. See [repair plan](docs/METAL_PERFORMANCE_REPAIR_PLAN.md) and [launch safety](docs/OFFLINE_DEMO_LAUNCH_SAFETY.md). Human real-scene acceptance remains pending.
+diff --git a/scripts/build-wiki.ps1 b/scripts/build-wiki.ps1
+index 0359b03e38d89fd1b9919a7035bd8bb72221dcf6..a07ca8e5057b5d4c872a7c93fa413c315de87c03 100644
+--- a/scripts/build-wiki.ps1
++++ b/scripts/build-wiki.ps1
+@@ -31,0 +32,2 @@ $pages = @(
++    @{ Section = 'For testers'; Page = 'Offline-demo-launch-safety'; Title = 'Offline demo launch safety'; Source = 'docs/OFFLINE_DEMO_LAUNCH_SAFETY.md' }
++    @{ Section = 'For testers'; Page = 'Metal-performance-repair'; Title = 'Metal performance repair'; Source = 'docs/METAL_PERFORMANCE_REPAIR_PLAN.md' }

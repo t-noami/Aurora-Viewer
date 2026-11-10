@@ -1,0 +1,12 @@
+diff --git a/TASKS.md b/TASKS.md
+index 1b68c3087f367f2c0e5682aaebd8e7b64fb81bc5..79fd19d03c2a77c98c2d01ffbb03362b4bfc5a17 100644
+--- a/TASKS.md
++++ b/TASKS.md
+@@ -1072,0 +1073 @@ What comes before the rest (requested by the human).
++- ✅ Metal performance repair plan documented (2026-10-30): [measurement gates, TBDR/resource lifetime audit, submission/upload priorities and real-scene acceptance](docs/METAL_PERFORMANCE_REPAIR_PLAN.md). Documentation only; implementation and the 120 FPS target remain open.
+diff --git a/scripts/build-wiki.ps1 b/scripts/build-wiki.ps1
+index 585ff81b6f8333c7b2b4b5a32537b8d203363305..0483ee3dec2c692046c7bfdc01bfdde991335edc 100644
+--- a/scripts/build-wiki.ps1
++++ b/scripts/build-wiki.ps1
+@@ -42,0 +43 @@ $pages = @(
++    @{ Section = 'Technical'; Page = 'Metal-performance-repair'; Title = 'Metal performance repair plan'; Source = 'docs/METAL_PERFORMANCE_REPAIR_PLAN.md' }
