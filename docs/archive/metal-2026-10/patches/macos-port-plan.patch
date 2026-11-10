@@ -1,0 +1,13 @@
+diff --git a/TASKS.md b/TASKS.md
+index fe0c60aca2276e39773a1fe207780885b3bcb248..0d27ae49006464a51ad48bc0e7b37004e2ffd155 100644
+--- a/TASKS.md
++++ b/TASKS.md
+@@ -1073 +1073 @@ What comes before the rest (requested by the human).
+-- ⬜ macOS release (the code stays portable; to be validated)
++- ⬜ macOS release: feasibility, rendering alternatives, validation and distribution plan in `docs/MACOS_PORT_PLAN.md`; implementation and macOS validation remain open
+diff --git a/scripts/build-wiki.ps1 b/scripts/build-wiki.ps1
+index 4bb9201d8f17b1f750a65bc0fba878f48834ce26..585ff81b6f8333c7b2b4b5a32537b8d203363305 100644
+--- a/scripts/build-wiki.ps1
++++ b/scripts/build-wiki.ps1
+@@ -44,0 +45 @@ $pages = @(
++    @{ Section = 'Technical'; Page = 'macOS-port-plan'; Title = 'macOS port plan'; Source = 'docs/MACOS_PORT_PLAN.md' }
