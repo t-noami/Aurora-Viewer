@@ -3969,7 +3969,7 @@ impl Settings {
         use aurora_render::{AntiAliasing, AoMethod, FsrQuality, Tonemapper};
         let mut water_effects = self.water_effects.render();
         water_effects.particle_budget = self.max_particles;
-        aurora_render::RenderSettings {
+        let mut rs = aurora_render::RenderSettings {
             vr_gamma: self.camera.vr.gamma,
             vr_vibrancy: self.camera.vr.vibrancy,
             vr_resolution: self.camera.vr.resolution,
@@ -4022,7 +4022,29 @@ impl Settings {
             occlusion: self.occlusion_culling,
             // the stochastic choice of the order of the blended faces
             oit: self.blend_order == crate::graphics_presets::BLEND_ORDER_STOCHASTIC,
+        };
+        // TEMPORARY (macOS GPU investigation): AURORA_EXP_RS=ssao=0,contact=0,...
+        if let Ok(v) = std::env::var("AURORA_EXP_RS") {
+            for kv in v.split(',') {
+                let (k, val) = kv.split_once('=').unwrap_or((kv, "0"));
+                let n: f32 = val.parse().unwrap_or(0.0);
+                match k {
+                    "ssao" => rs.ssao = n as u8,
+                    "legacyao" => rs.ao_method = AoMethod::Legacy,
+                    "contact" => rs.contact_shadows = n != 0.0,
+                    "specaa" => rs.specular_aa = n != 0.0,
+                    "wrefl" => rs.water_reflection_scale = n,
+                    "aniso" => rs.anisotropy = n as u16,
+                    "probes" => rs.probe_slots = n as u32,
+                    "occlusion" => rs.occlusion = n != 0.0,
+                    "aa" => rs.aa = AntiAliasing::None,
+                    "hdr" => rs.hdr = n != 0.0,
+                    "shadowres" => rs.shadow_resolution = n as u32,
+                    _ => log::warn!("AURORA_EXP_RS: unknown {k}"),
+                }
+            }
         }
+        rs
     }
 
     /// Fraction of the screen resolution for a reflection quality step.

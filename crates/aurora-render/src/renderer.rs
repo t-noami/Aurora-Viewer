@@ -1187,6 +1187,18 @@ struct Ssao {
     buffer: wgpu::Buffer,
 }
 
+/// TEMPORARY (macOS GPU investigation): AURORA_EXP_SKIP=probe,exposure,pick,glow,bloom
+pub(crate) fn exp_skip(name: &str) -> bool {
+    static SKIP: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    SKIP.get_or_init(|| {
+        std::env::var("AURORA_EXP_SKIP")
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+            .unwrap_or_default()
+    })
+    .iter()
+    .any(|s| s == name)
+}
+
 struct GpuTimer {
     query_set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
@@ -3799,7 +3811,7 @@ impl Backend {
             present_modes
         );
         let mut surface_usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+        if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) && std::env::var_os("AURORA_EXP_SURFACE_NOCOPY").is_none() {
             surface_usage |= wgpu::TextureUsages::COPY_SRC;
         }
         let config = wgpu::SurfaceConfiguration {
@@ -9182,7 +9194,7 @@ impl Backend {
         }
         // ---- reflection probes: list for the shaders, face capture uniforms
         self.probes.upload(&self.queue, f.probes.enabled, &probe_list, &probe_sets);
-        let capture = f.probes.capture;
+        let capture = f.probes.capture.filter(|_| !exp_skip("probe"));
         // skies with a probe ambiance light with the probes' irradiance
         // (shade_pbr), which gets a capture of its own
         let irr_capture = capture.is_some() && !f.sky.classic && !f.sky.no_post;
@@ -9283,7 +9295,10 @@ impl Backend {
         }
         // glow passes only when some visible face glows (RenderGlow)
         // (a cut-out photo's alpha holds its coverage instead, cutout.rs)
-        let glow_on = f.glow && !f.cutout && (!lists.glow.is_empty() || !lists.glow_alpha.is_empty() || lists.blend_glow.contains(&true));
+        let glow_on = !exp_skip("glow")
+            && f.glow
+            && !f.cutout
+            && (!lists.glow.is_empty() || !lists.glow_alpha.is_empty() || lists.blend_glow.contains(&true));
         // diagnostic: AURORA_GLOW_SKIP bits leave out a family of glowing faces
         // (2 opaque, 4 alpha pool, 8 blended)
         static GLOW_SKIP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
@@ -9294,7 +9309,8 @@ impl Backend {
             static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
             let secs = START.get_or_init(Instant::now).elapsed().as_secs();
             let debug_view = f.debug_glow || f.debug.shadows || f.debug.ambient_occlusion;
-            let (strength, keep) = crate::bloom::Override::from_env().strength(if debug_view { 0.0 } else { f.bloom }, secs);
+            let (strength, keep) =
+                crate::bloom::Override::from_env().strength(if debug_view || exp_skip("bloom") { 0.0 } else { f.bloom }, secs);
             if keep && !debug_view {
                 self.bloom.ensure(&self.device, post_size);
             } else {
@@ -11821,14 +11837,16 @@ impl Backend {
             self.drawn_pick.encode_copy(&mut encoder);
         }
         // depth under the cursor, read back in a later frame
-        self.depth_pick.encode_hover(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            &self.targets.depth_ss,
-            world_size,
-            unjittered_vp.inverse(),
-        );
+        if !exp_skip("pick") {
+            self.depth_pick.encode_hover(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &self.targets.depth_ss,
+                world_size,
+                unjittered_vp.inverse(),
+            );
+        }
         let enc_scene = std::mem::replace(
             &mut encoder,
             self.device
@@ -11965,23 +11983,25 @@ impl Backend {
         // ---- automatic exposure, from the resolved scene and the glow of
         // the last frame, into the post uniforms the glow, the bloom and the
         // tone mapping read
-        self.exposure.encode(
-            &self.queue,
-            &mut encoder,
-            &crate::exposure::FrameExposure {
-                // (no generateExposure without HDR: the exposure stays 1)
-                tone_mapped: !f.sky.no_post && self.settings.hdr,
-                hdr: self.settings.hdr,
-                hdr_scale: f.sky.hdr_scale,
-                // (a cut-out photo's empty background would raise it: the
-                // subject keeps the exposure the whole scene gave it;
-                // without HDR there is none to keep)
-                hold: (snapshot.is_some() || f.exposure_lock || f.cutout) && self.settings.hdr,
-                glow: self.glow_drawn,
-            },
-            &self.post_buffer,
-            POST_AUTO_EXPOSURE_OFFSET,
-        );
+        if !exp_skip("exposure") {
+            self.exposure.encode(
+                &self.queue,
+                &mut encoder,
+                &crate::exposure::FrameExposure {
+                    // (no generateExposure without HDR: the exposure stays 1)
+                    tone_mapped: !f.sky.no_post && self.settings.hdr,
+                    hdr: self.settings.hdr,
+                    hdr_scale: f.sky.hdr_scale,
+                    // (a cut-out photo's empty background would raise it: the
+                    // subject keeps the exposure the whole scene gave it;
+                    // without HDR there is none to keep)
+                    hold: (snapshot.is_some() || f.exposure_lock || f.cutout) && self.settings.hdr,
+                    glow: self.glow_drawn,
+                },
+                &self.post_buffer,
+                POST_AUTO_EXPOSURE_OFFSET,
+            );
+        }
         // the viewfinder's histogram, of the live view only
         if let Some(exposure) = histogram
             && snapshot.is_none()
@@ -12238,7 +12258,7 @@ impl Backend {
             );
             calls.set(calls.get() + passes as u32);
         }
-        if let Some(scaled) = &self.rlva_scaled {
+        if let Some(scaled) = self.rlva_scaled.as_ref().filter(|_| !exp_skip("upscale")) {
             scaled.encode(&self.queue, &mut encoder, &surface_view, upscale_sharpen);
             calls.set(calls.get() + 1);
         }
@@ -12504,7 +12524,7 @@ impl Backend {
             encoder.copy_buffer_to_buffer(&t.resolve, 0, &t.readback[slot].0, 0, GPU_TIMESTAMPS as u64 * 8);
         }
         // ---- egui: the rest of the interface, over the HUD attachments
-        if let Some(ui) = &mut ui {
+        if let Some(ui) = ui.as_mut().filter(|_| !exp_skip("ui")) {
             if window_glass && let Some(glass) = &self.ui_glass {
                 let scene = self.ui_blur.as_ref().map_or(surface_tex.texture(), |blur| &blur.source);
                 glass.encode(&mut encoder, scene);
