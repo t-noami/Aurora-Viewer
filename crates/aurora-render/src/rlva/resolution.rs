@@ -54,15 +54,33 @@ pub(crate) struct Scaled {
 
 impl Scaled {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32), smooth: bool) -> Self {
-        let (texture, view) = crate::renderer::make_view(
-            device,
-            "RLVa reduced scene",
-            size.0,
-            size.1,
+        // The upscale reads the reduced scene through an sRGB view of the
+        // same texture where the format has one: the texture unit decodes
+        // each texel, instead of a `pow` per channel of the twelve or
+        // sixteen texels the filter reads (about 1.4 ms a frame at 5K on an
+        // Apple M2 Pro). The post pass still writes through the plain view.
+        let srgb = (format.add_srgb_suffix() != format).then(|| format.add_srgb_suffix());
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RLVa reduced scene"),
+            size: wgpu::Extent3d {
+                width: size.0.max(1),
+                height: size.1.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
             format,
-            1,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        );
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: srgb.as_slice(),
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let read = srgb.map(|format| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(format),
+                ..Default::default()
+            })
+        });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("RLVa resolution"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/rlva_resolution.wgsl").into()),
@@ -81,8 +99,12 @@ impl Scaled {
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &[
-                        ("spatial_upscale", f64::from(smooth)),
+                        (
+                            "spatial_upscale",
+                            f64::from(smooth && std::env::var_os("AURORA_EXP_UPSCALE_NEAREST").is_none()),
+                        ),
                         ("encoded_input", f64::from(!format.is_srgb())),
+                        ("decoded_reads", f64::from(read.is_some())),
                     ],
                     ..Default::default()
                 },
@@ -110,7 +132,7 @@ impl Scaled {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
+                    resource: wgpu::BindingResource::TextureView(read.as_ref().unwrap_or(&view)),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
