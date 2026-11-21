@@ -9716,6 +9716,7 @@ impl Backend {
                 (do_water_refl, frame_flags::WATER),
                 (do_water_air, frame_flags::WATER_AIR),
                 (mirror.is_some(), frame_flags::MIRROR),
+                (mirror.as_ref().is_some_and(|m| m.dynamic), frame_flags::MIRROR_DYNAMIC),
                 (probe.is_some(), frame_flags::PROBE),
                 (occl, frame_flags::OCCLUSION),
                 (profile(), frame_flags::SHADOW_STATS),
@@ -9788,7 +9789,21 @@ impl Backend {
             rg.water_air_terrain_pbr = push(cpu, &cull_cmds_to_view(air_vp, &lists.reflection_terrain_pbr));
         }
         if mirror.is_some() {
-            rg.refl_mirror = push(cpu, &cull_to_view(mirror_vp, &lists.reflection));
+            // a static mirror without avatars, attachments and animesh
+            // (MirrorParams::dynamic)
+            let dynamic = mirror.as_ref().is_some_and(|m| m.dynamic);
+            let shown: Vec<ShadowCaster> = if dynamic {
+                lists.reflection.clone()
+            } else {
+                lists
+                    .reflection
+                    .iter()
+                    .zip(lists.reflection_dynamic.iter().chain(std::iter::repeat(&false)))
+                    .filter(|(_, d)| !**d)
+                    .map(|(c, _)| *c)
+                    .collect()
+            };
+            rg.refl_mirror = push(cpu, &cull_to_view(mirror_vp, &shown));
             let [rigged, rest] = mirror_blend_order(mirror_vp, mirror_eye, &lists.reflection_blend, lists.reflection_blend_rigged);
             rg.refl_mirror_blend = [push(cpu, &rigged), push(cpu, &rest)];
         }

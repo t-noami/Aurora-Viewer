@@ -710,6 +710,9 @@ pub struct DrawLists {
     /// (water and mirror); drawn without face culling, alpha tested.
     /// With their bounds: each reflection pass culls them to its own frustum.
     pub reflection: Vec<ShadowCaster>,
+    /// For each of `reflection`: an avatar, its attachments or animesh,
+    /// which a static mirror leaves out (`MirrorParams::dynamic`).
+    pub reflection_dynamic: Vec<bool>,
     /// Blended faces for the mirror, in view or not, with their bounds
     /// (`DrawCmd::bounds`): the first `reflection_blend_rigged` are rigged
     /// faces in the Legacy Viewer's order (drawn first, writing depth, as
@@ -872,6 +875,7 @@ impl DrawLists {
         self.shelter_casters.clone_from(&src.shelter_casters);
         self.terrain_shadow_casters.clone_from(&src.terrain_shadow_casters);
         self.reflection.clone_from(&src.reflection);
+        self.reflection_dynamic.clone_from(&src.reflection_dynamic);
         self.reflection_blend.clone_from(&src.reflection_blend);
         self.reflection_blend_rigged = src.reflection_blend_rigged;
         self.probe.clone_from(&src.probe);
@@ -930,6 +934,7 @@ impl DrawLists {
         self.shelter_casters.clear();
         self.terrain_shadow_casters.clear();
         self.reflection.clear();
+        self.reflection_dynamic.clear();
         self.reflection_blend.clear();
         self.reflection_blend_rigged = 0;
         self.probe.clear();
@@ -1471,6 +1476,10 @@ pub struct MirrorParams {
     pub normal: Vec3,
     /// World -> probe box local space ([-0.5, 0.5]^3 inside).
     pub world_to_box: Mat4,
+    /// Its probe is flagged dynamic: avatars, their attachments and animesh
+    /// show in it. A static mirror leaves them out, as the Legacy Viewer's
+    /// (LLViewerWindow::cubeSnapshot with dynamic_render_types off).
+    pub dynamic: bool,
 }
 
 /// Camera and environment for one frame.

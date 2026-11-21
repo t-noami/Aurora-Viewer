@@ -883,6 +883,9 @@ pub struct Scene {
     /// The plane (point, normal) of the mirror the last frame drew, for the
     /// flexible prims only it shows (flexible.rs).
     pub mirror_plane: Option<(Vec3, Vec3)>,
+    /// That mirror is a dynamic probe (`MirrorParams::dynamic`): its blended
+    /// faces include avatars, their attachments and animesh.
+    pub mirror_dynamic: bool,
     /// Grass tufts drawn, and the terrain they were placed on (plants.rs).
     grass: HashMap<usize, plants::GrassBuilt>,
     pub textures: TextureStreamer,
@@ -1707,6 +1710,7 @@ impl Scene {
             geoms: Default::default(),
             flexibles: Default::default(),
             mirror_plane: None,
+            mirror_dynamic: false,
             grass: HashMap::new(),
             textures: TextureStreamer::new(cache_dir.clone()),
             meshes: MeshStreamer::new(cache_dir.clone()),
@@ -2721,6 +2725,8 @@ impl Scene {
                     point: pos,
                     normal,
                     world_to_box: to_box,
+                    // LLReflectionProbeParams::FLAG_DYNAMIC
+                    dynamic: o.extra.reflection_probe.is_some_and(|p| p.flags & 0x2 != 0),
                 },
             ));
         }
@@ -5300,6 +5306,7 @@ impl Scene {
         // the mirror the last frame drew (as the flexible prims): only then,
         // and only on its side, are the blended faces gathered for it
         let mirror_plane = self.mirror_plane;
+        let mirror_dynamic = self.mirror_dynamic;
         let selection_wire = &self.selection_wire;
         let selection_faces = &self.selection_faces;
         let pattern_faces = &self.pattern_faces;
@@ -5342,6 +5349,7 @@ impl Scene {
             casters: Vec<ShadowCaster>,
             shelter: Vec<ShadowCaster>,
             refl: Vec<ShadowCaster>,
+            refl_dynamic: Vec<bool>,
             refl_blend: Vec<blend_order::BlendEntry>,
             probe: Vec<ShadowCaster>,
             visible: usize,
@@ -5371,6 +5379,7 @@ impl Scene {
             casters: Vec::new(),
             shelter: Vec::new(),
             refl: Vec::new(),
+            refl_dynamic: Vec::new(),
             refl_blend: Vec::new(),
             probe: Vec::new(),
             visible: 0,
@@ -5590,6 +5599,7 @@ impl Scene {
                         };
                         if reflects {
                             l.refl.push(c);
+                            l.refl_dynamic.push(avatar.is_some() || g.skeleton_owner.is_some());
                         }
                         if probes && avatar.is_none() && g.skeleton_owner.is_none() {
                             l.probe.push(c);
@@ -5598,7 +5608,11 @@ impl Scene {
                 }
                 // the mirror's blended faces, in view or not (the CPU lists
                 // hold every blended face, GPU culling or not: `is_special`)
-                if reflects && pass == Pass::Blend && mirror_plane.is_some_and(|(p, n)| n.dot(sc - p) > -sr) {
+                if reflects
+                    && pass == Pass::Blend
+                    && (mirror_dynamic || (avatar.is_none() && g.skeleton_owner.is_none()))
+                    && mirror_plane.is_some_and(|(p, n)| n.dot(sc - p) > -sr)
+                {
                     l.refl_blend.push(blend_order::BlendEntry {
                         distance: if g.rigged { blend_d } else { (sc - view.eye).length() },
                         cmd,
@@ -5688,6 +5702,7 @@ impl Scene {
             a.casters.append(&mut b.casters);
             a.shelter.append(&mut b.shelter);
             a.refl.append(&mut b.refl);
+            a.refl_dynamic.append(&mut b.refl_dynamic);
             a.refl_blend.append(&mut b.refl_blend);
             a.probe.append(&mut b.probe);
             a.visible += b.visible;
@@ -5756,6 +5771,7 @@ impl Scene {
         self.lists.shadow_casters.extend(result.casters);
         self.lists.shelter_casters.extend(result.shelter);
         self.lists.reflection = result.refl;
+        self.lists.reflection_dynamic = result.refl_dynamic;
         // the rigged first, in the Legacy Viewer's order and writing depth as
         // LLDrawPoolAlpha::forwardRender(true); the rest the mirror sorts
         let mut refl_blend = result.refl_blend;

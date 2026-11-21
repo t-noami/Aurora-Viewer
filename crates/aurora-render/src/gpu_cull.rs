@@ -191,6 +191,12 @@ pub mod frame_flags {
     /// moves (avatars, rigged meshes, physical objects) is left out of it,
     /// so that it leaves no dry patch following it.
     pub const SPOT_SHELTER: u32 = 16384;
+    /// The mirror is a dynamic probe: it draws avatars, their attachments
+    /// and animesh too (`object_flags::NO_PROBE`), as the Legacy Viewer's
+    /// hero probe does only for a probe flagged dynamic
+    /// (LLViewerWindow::cubeSnapshot's dynamic_render_types,
+    /// LLReflectionMap::getIsDynamic).
+    pub const MIRROR_DYNAMIC: u32 = 512;
 }
 
 const CLASSIFY_GROUP: u32 = 128;
@@ -614,7 +620,10 @@ pub fn face_bins(frame: &CullFrame, faces: &[CullFace], objects: &[CullObject], 
         {
             m |= 1 << BIN_REFL_WATER;
         }
-        if fl & frame_flags::MIRROR != 0 && sphere_in(&frame.mirror, c, r) {
+        if fl & frame_flags::MIRROR != 0
+            && (o.flags & object_flags::NO_PROBE == 0 || fl & frame_flags::MIRROR_DYNAMIC != 0)
+            && sphere_in(&frame.mirror, c, r)
+        {
             m |= 1 << BIN_REFL_MIRROR;
         }
     }
@@ -1718,6 +1727,7 @@ mod tests {
             ("F_WATER", frame_flags::WATER),
             ("F_WATER_AIR", frame_flags::WATER_AIR),
             ("F_MIRROR", frame_flags::MIRROR),
+            ("F_MIRROR_DYNAMIC", frame_flags::MIRROR_DYNAMIC),
             ("F_PROBE", frame_flags::PROBE),
         ] {
             assert_eq!(value(name), v, "{name}");

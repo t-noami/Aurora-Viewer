@@ -12331,6 +12331,7 @@ impl App {
             None
         };
         self.scene.mirror_plane = mirror.as_ref().map(|m| (m.point, m.normal));
+        self.scene.mirror_dynamic = mirror.as_ref().is_some_and(|m| m.dynamic);
         t_part = self.scene.parts.lap(Part::ParamsMirror, t_part);
         if in_world {
             self.scene.update_water_effects(

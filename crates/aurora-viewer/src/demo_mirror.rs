@@ -33,7 +33,7 @@ pub fn enabled() -> bool {
     *ENABLED
 }
 
-/// AURORA_DEMO_MIRROR=plaza: a mirror 12 m ahead of the start view (or of
+/// AURORA_DEMO_MIRROR=plaza: a mirror 9 m ahead of the start view (or of
 /// AURORA_DEMO_POS), facing it, its center 2.5 m over the ground. A mirror
 /// in a busy place draws all of it a second time: with AURORA_DEMO_CROWD,
 /// AURORA_DEMO_LIGHTS and AURORA_DEMO_VEILS, the load of a busy store on
@@ -41,7 +41,7 @@ pub fn enabled() -> bool {
 pub fn plaza_enabled() -> bool {
     static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
         std::env::var("AURORA_DEMO").is_ok_and(|v| v.trim() == "1")
-            && std::env::var("AURORA_DEMO_MIRROR").is_ok_and(|v| v.trim() == "plaza")
+            && std::env::var("AURORA_DEMO_MIRROR").is_ok_and(|v| matches!(v.trim(), "plaza" | "plaza-dynamic"))
     });
     *ENABLED
 }
@@ -55,12 +55,13 @@ pub fn plaza(first: u32) -> [ObjectUpdate; 2] {
         .map(|v| v.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect::<Vec<_>>())
         .filter(|p| p.len() >= 2)
         .map_or(Vec3::new(132.0, 126.0, 0.0), |p| Vec3::new(p[0], p[1], 0.0));
-    let at = eye + look * 12.0;
+    let at = eye + look * 9.0;
     let center = Vec3::new(at.x, at.y, height(at.x, at.y) + 2.5);
     // its plane along its local +Z, toward the start view; local Y up
     let front = -look;
     let rot = Quat::from_mat3(&Mat3::from_cols(Vec3::Z.cross(front), Vec3::Z, front));
-    mirror(first, center, rot, [0.05, 0.05, 0.05, 1.0])
+    let dynamic = std::env::var("AURORA_DEMO_MIRROR").is_ok_and(|v| v.trim() == "plaza-dynamic");
+    mirror(first, center, rot, [0.05, 0.05, 0.05, 1.0], dynamic)
 }
 
 /// The plaza's mirror: the center and rotation of its probe and panel (the
@@ -74,12 +75,14 @@ pub fn placement() -> (Vec3, Quat) {
 /// A mirror as built in SL: an invisible box reflection probe flagged as
 /// mirror (its plane through the center, along its +Z), and a shiny 10 cm
 /// panel of `color` through that plane.
-pub fn mirror(first: u32, center: Vec3, rot: Quat, color: [f32; 4]) -> [ObjectUpdate; 2] {
+/// `dynamic`: the probe also draws avatars, their attachments and animesh
+/// (LLReflectionProbeParams::FLAG_DYNAMIC).
+pub fn mirror(first: u32, center: Vec3, rot: Quat, color: [f32; 4], dynamic: bool) -> [ObjectUpdate; 2] {
     let boxp = shape(LL_PCODE_PATH_LINE, LL_PCODE_PROFILE_SQUARE, 100, 0, 0);
     let probe = aurora_prim::extra::ReflectionProbeParams {
         ambiance: 0.0,
         clip_distance: 0.0,
-        flags: 0x1 | 0x4,
+        flags: 0x1 | 0x4 | if dynamic { 0x2 } else { 0 },
     };
     [
         prim(
@@ -190,7 +193,8 @@ pub fn objects(first: u32) -> Vec<ObjectUpdate> {
     let lace = at(1.5, 0.9, 1.3);
     // a dark face, as most mirrors are built: the room's lamp would light a
     // pale one over its reflection
-    let mut objects = mirror(first, center, rot, [0.05, 0.05, 0.05, 1.0]).to_vec();
+    // flagged dynamic, as a mirror meant to show avatars is built in SL
+    let mut objects = mirror(first, center, rot, [0.05, 0.05, 0.05, 1.0], true).to_vec();
     // AURORA_DEMO_MIRROR_METAL=1: the panel in polished PBR metal (metallic
     // 1, roughness 0.05), where SSR's fresnel weight nears 1, and 5 cm thin:
     // its face 2.5 cm off the probe's plane, where the mirror's weight is

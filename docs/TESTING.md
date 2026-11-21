@@ -5327,7 +5327,7 @@ both open states and the selection count. Capture at frame 620.
 | `AURORA_DEMO_BLEND_AO=1` | A face whose two halves differ in alpha mode, under a hat brim, ahead and left of the start position (#882) |
 | `AURORA_DEMO_WET_LAYER=1` | Three spheres under transparent shells, two with a shiny blended legacy material: the wet layers of mesh bodies (#1420) |
 | `AURORA_DEMO_MIRROR=1` | A closed room with a mirror, our avatar facing it, lace, red glass and a black shiny ball between them (#3479) |
-| `AURORA_DEMO_MIRROR=plaza` | A mirror 12 m ahead of the start view, facing it, reflecting the plaza: a busy place drawn twice (#3218) |
+| `AURORA_DEMO_MIRROR=plaza` or `plaza-dynamic` | A mirror 9 m ahead of the start view, facing it, reflecting the plaza (nearer than the plaza's own static mirror): a busy place drawn twice (#3218); `plaza-dynamic`: its probe flagged dynamic, avatars included |
 | `AURORA_DEMO_MIRROR_METAL=1` | With `AURORA_DEMO_MIRROR`: the mirror's panel in polished PBR metal, 5 cm thin (its face 2.5 cm off the probe's plane); with SSR on, the mirror must still show our avatar's front, not SSR's copy of its back (#3375) |
 | `AURORA_DEMO_LASHES=1` | With `AURORA_DEMO_HAIR`: a red ball worn inside our hair, as eyelashes behind a fringe |
 | `AURORA_DEMO_HAIR_CARDS=<n>[,layered[,outer]]` | Our avatar wears one face of `n` soft strand cards, overlapping in a shuffled order, or layered as a hair is made (#935) |
@@ -13436,7 +13436,8 @@ What the inventory must show with these scenarios:
   showed anything.
 - **`AURORA_DEMO_MIRROR=1`**: a closed room on the open patch at
   (100, 100), lit by a warm lamp under its roof, with a manual box probe
-  filling it and a dark mirror on its east wall; our avatar starts 3 m in
+  filling it and a dark mirror on its east wall (its probe flagged dynamic,
+  so that it shows avatars); our avatar starts 3 m in
   front of the mirror, facing it (`AURORA_DEMO_POS` is ignored). Between
   the two: on the left a skin-coloured ball under a black lace shell (a
   blended texture of opaque threads, half-covered borders and holes), on
@@ -13448,10 +13449,14 @@ What the inventory must show with these scenarios:
   #3479 the mirror had neither the lace nor the glass, and lit its image
   by the sky and the sun through the roof: a pale grey avatar and a navy
   blue ball.
-- **`AURORA_DEMO_MIRROR=plaza`**: a dark mirror 3 m wide, its center
-  12 m ahead of the start view (or of `AURORA_DEMO_POS`) and 2.5 m over the
-  ground, facing the camera. It reflects the plaza and whatever the other
-  scenarios put there, so that the mirror pass draws a busy place a second
+- **`AURORA_DEMO_MIRROR=plaza`** (or `plaza-dynamic`): a dark mirror 3 m
+  wide, its center 9 m ahead of the start view (or of `AURORA_DEMO_POS`)
+  and 2.5 m over the ground, facing the camera: nearer than the plaza's own
+  static mirror, so that it is the one drawn. Its probe is static: as in
+  the Legacy Viewer (LLViewerWindow::cubeSnapshot, dynamic render types
+  off), it shows no avatar, attachment or animesh; `plaza-dynamic` flags
+  the probe dynamic and shows them. It reflects the plaza and whatever the
+  other scenarios put there, so that the mirror pass draws a busy place a second
   time, as a mirror in a store on the grid does (#3218). The load of such a
   store: `AURORA_DEMO_CROWD=40`, `AURORA_DEMO_LIGHTS=64`, this mirror and
   `AURORA_DEMO_VEILS=12,12` (blended layers between the camera and the

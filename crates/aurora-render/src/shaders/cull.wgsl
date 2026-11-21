@@ -110,6 +110,8 @@ const F_SPOT: u32 = 65536u;
 const F_WATER_AIR: u32 = 1024u;
 // blended faces that are not rigged cast too (off: AURORA_BLEND_SHADOWS=0)
 const F_BLEND_CASTS: u32 = 2048u;
+// the mirror draws avatars, attachments and animesh (a dynamic probe)
+const F_MIRROR_DYNAMIC: u32 = 512u;
 const F_FIRST_PERSON: u32 = 4096u;
 const F_SHOW_SELF: u32 = 8192u;
 // projector map groups.w is the rain's shelter map: what moves is left out
@@ -476,7 +478,8 @@ fn face_mask(i: u32) -> u32 {
             ((fl & F_WATER_AIR) != 0u && sphere_in(frame.water_air, c, r))) {
             m |= 1u << BIN_REFL_WATER;
         }
-        if ((fl & F_MIRROR) != 0u && sphere_in(frame.mirror, c, r)) {
+        if ((fl & F_MIRROR) != 0u && ((o.flags & OBJ_NO_PROBE) == 0u || (fl & F_MIRROR_DYNAMIC) != 0u)
+            && sphere_in(frame.mirror, c, r)) {
             m |= 1u << BIN_REFL_MIRROR;
         }
     }

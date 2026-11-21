@@ -6024,7 +6024,7 @@ pub fn events() -> Vec<NetEvent> {
     // the Legacy Viewer gives it almost the whole mirror (tapHeroProbe)
     {
         let (center, rot) = mirror::placement();
-        for o in mirror::mirror(id, center, rot, [0.85, 0.87, 0.9, 1.0]) {
+        for o in mirror::mirror(id, center, rot, [0.85, 0.87, 0.9, 1.0], false) {
             add(o);
         }
         id += 2;
