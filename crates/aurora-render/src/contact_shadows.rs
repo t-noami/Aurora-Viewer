@@ -449,9 +449,16 @@ fn without_shared(mut src: String) -> String {
         "    if (skip_pixel) {\n        store_lit(write_xy);\n        return;\n    }\n",
         "    let skip_pixel = sampling_depth[0] >= NEAR_DEPTH || sampling_depth[0] <= FAR_DEPTH;\n    if (skip_pixel) {\n        store_lit(write_xy);\n        return;\n    }\n    let wave = Wave(start_xy, end_xy, xy_delta, x_axis_major, reverse_direction, major_axis_start, ma_light_frac, direction, z_sign);\n",
     );
-    let reads = src.matches("depth_data[sample_index + i]").count();
-    assert_eq!(reads, 3, "contact shadows variant: the shared reads");
-    src = src.replace("depth_data[sample_index + i]", "stored_depth(wave, sample_index + i)");
+    // the shared reads: the hard samples, the four lanes of the bulk and of
+    // the fade-out, and the indexed loops a photo's counts keep
+    let mut reads = 0;
+    while let Some(at) = src.find("depth_data[sample_index + ") {
+        let end = at + src[at..].find(']').expect("contact shadows variant: an unclosed shared read");
+        let index = src[at + "depth_data[".len()..end].to_owned();
+        src.replace_range(at..=end, &format!("stored_depth(wave, {index})"));
+        reads += 1;
+    }
+    assert_eq!(reads, 11, "contact shadows variant: the shared reads");
     src.push_str(&include_str!("shaders/contact_shadows_no_shared.wgsl").replace("\r\n", "\n"));
     src
 }
@@ -1203,7 +1210,7 @@ mod tests {
             assert!(!photo.contains(gone), "{gone}");
         }
         assert!(photo.contains(&format!("const SAMPLE_COUNT: i32 = {count};")));
-        assert_eq!(photo.matches("stored_depth(wave, sample_index + i)").count(), 3);
+        assert_eq!(photo.matches("stored_depth(wave, sample_index + i").count(), 11);
     }
 
     /// Each variant drops what it says and only that (the shaders' own
@@ -1219,7 +1226,7 @@ mod tests {
         for gone in ["var<workgroup>", "workgroupBarrier", "workgroupUniformLoad", "depth_data"] {
             assert!(!no_shared.contains(gone), "{gone}");
         }
-        assert_eq!(no_shared.matches("stored_depth(wave, sample_index + i)").count(), 3);
+        assert_eq!(no_shared.matches("stored_depth(wave, sample_index + i").count(), 11);
         assert!(variant_source(Variant::Short).contains("const SAMPLE_COUNT: i32 = 16;"));
     }
 
