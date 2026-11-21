@@ -99,10 +99,7 @@ impl Scaled {
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &[
-                        (
-                            "spatial_upscale",
-                            f64::from(smooth && std::env::var_os("AURORA_EXP_UPSCALE_NEAREST").is_none()),
-                        ),
+                        ("spatial_upscale", f64::from(smooth)),
                         ("encoded_input", f64::from(!format.is_srgb())),
                         ("decoded_reads", f64::from(read.is_some())),
                     ],
