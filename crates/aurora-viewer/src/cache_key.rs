@@ -25,7 +25,12 @@ pub fn load() -> Key {
         return Key::random().unwrap_or_else(|| Key::from_bytes([0x5a; 32]));
     }
     let started = std::time::Instant::now();
+    // The offline demo keeps its key in its own configuration folder: it
+    // never meets a grid, and on macOS each rebuilt development binary is a
+    // new application to the Keychain, which asked for access at every
+    // demo launch.
     if aurora_updater::test_environment().is_none()
+        && std::env::var_os("AURORA_DEMO").is_none()
         && let Some(key) = from_store()
     {
         log::info!("cache key: credential store ({} ms)", started.elapsed().as_millis());
